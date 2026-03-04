@@ -59,7 +59,7 @@ app = FastAPI(title="AVAGAMYA Security Ingestion Layer")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://192.168.31.137:5173", "https://avagamya.vercel.app", "*"],
+    allow_origins=["http://localhost:5173", "http://192.168.31.137:5173", "https://avagamya.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
