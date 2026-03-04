@@ -8,8 +8,7 @@ textstat
 python-dotenv
 pymupdf
 httpx
-# Direct binary wheels to bypass compilation
-https://files.pythonhosted.org/packages/f0/11/4989e240292728989501170669145f8f5539d6756201b17b3848b326042b/spacy-3.7.5-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-https://files.pythonhosted.org/packages/f6/21/f0c239d20c5780a402376f9d6c35349e54366551b9d40b080f589b21e8e8/blis-0.7.11-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-https://files.pythonhosted.org/packages/45/63/1f868018c1214e21894d07010e68d374889c1692290401490226343513b6/thinc-8.2.4-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+spacy==3.7.5
+blis==0.7.11
+thinc==8.2.4
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
