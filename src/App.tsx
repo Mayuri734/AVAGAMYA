@@ -14,7 +14,8 @@ import { AuditorDashboard } from './pages/AuditorDashboard'
 import { ComplianceOfficer } from './pages/ComplianceOfficer'
 import { DPOLogin } from './pages/DPOLogin';
 import { ComplianceLogin } from './pages/ComplianceLogin';
-import { AuditorLogin } from './pages/AuditorLogin'; 
+import { AuditorLogin } from './pages/AuditorLogin';
+import { Docs } from './pages/Docs';
 
 export default function App() {
   return (
@@ -27,17 +28,18 @@ export default function App() {
             <Route path="about" element={<About />} />
             <Route path="how-it-works" element={<HowItWorks />} />
             <Route path="faqs" element={<FAQs />} />
-            
+            <Route path="docs" element={<Docs />} />
+
             {/* Analysis Workflow */}
             <Route path="analyze/language" element={<LanguageSelection />} />
             <Route path="staff/modules" element={<ModuleSelector />} />
             <Route path="analyze/upload" element={<UploadDocument />} />
             <Route path="analyze/result" element={<AnalysisResult />} />
 
-{/* Staff Login Routes */}
-  <Route path="staff/dpo/login" element={<DPOLogin />} />
-  <Route path="staff/compliance/login" element={<ComplianceLogin />} />
-  <Route path="staff/auditor/login" element={<AuditorLogin />} />
+            {/* Staff Login Routes */}
+            <Route path="staff/dpo/login" element={<DPOLogin />} />
+            <Route path="staff/compliance/login" element={<ComplianceLogin />} />
+            <Route path="staff/auditor/login" element={<AuditorLogin />} />
 
             {/* Staff/Enterprise Routes: Now inside Layout to show Navbar */}
             <Route path="staff/dpo-dashboard" element={<DPODashboard />} />
