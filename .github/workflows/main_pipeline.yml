@@ -11,15 +11,11 @@ jobs:
     name: Multi-Stage Quality Gate
     runs-on: ubuntu-latest
     
-    services:
-      # Future: Add redis or postgres here if needed for integration tests
-      # For now, we use mock environments via environment variables
-
     env:
-      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY || 'MOCK_GOOGLE_KEY' }}
-      SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY || 'MOCK_SARVAM_KEY' }}
-      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'http://localhost:54321' }}
-      VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY || 'MOCK_SUPABASE_KEY' }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
       VITE_URL: http://localhost:5173
       API_BASE_URL: http://localhost:8000
       LANGSMITH_TRACING: 'false' # Disable tracing in CI unless secrets provided
