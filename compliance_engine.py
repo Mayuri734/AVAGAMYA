@@ -105,6 +105,29 @@ def _normalize_cell(cell: Optional[str]) -> str:
     return " ".join(str(cell).split())
 
 
+def _contextual_row_sentences(table: List[List[Optional[str]]]) -> List[str]:
+    """Convert raw table rows into a list of contextual sentences."""
+    sentences: List[str] = []
+    for row in table:
+        if not row:
+            continue
+        header = _normalize_cell(row[0])
+        value = _normalize_cell(row[1]) if len(row) > 1 else ""
+        if not header and not value:
+            continue
+        if header and value:
+            combined = f"{header}: {value}"
+            if combined and combined[-1] not in ".?!":
+                combined += "."
+            sentences.append(combined)
+        elif header:
+            if header[-1] not in ".?!":
+                header += "."
+            sentences.append(header)
+        else:
+            if value[-1] not in ".?!":
+                value += "."
+            sentences.append(value)
     return sentences
 
 

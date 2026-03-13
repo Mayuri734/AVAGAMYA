@@ -1255,52 +1255,43 @@ class SymbolicAnalysisEngine:
                 )
 
         high_risk_clauses_with_pages.sort(key=lambda x: x["score"], reverse=True)
+        texts_to_simplify = [unicodedata.normalize("NFKC", c["text"]) for c in high_risk_clauses_with_pages]
+        simplified_map = await cls._orchestrate_ai_simplification(texts_to_simplify, language)
 
+        return await _build_high_risk_response(
+            high_risk_clauses_with_pages, simplified_map, pdf_bytes, total_scanned
+        )
+
+    @classmethod
+    async def _orchestrate_ai_simplification(
+        cls, texts: List[str], language: str
+    ) -> Dict[str, str]:
+        """Orchestrate Sarvam AI simplification with Gemini fallback."""
         simplified_map = {}
-        if high_risk_clauses_with_pages:
-            all_high_risk_texts = [
-                unicodedata.normalize("NFKC", c["text"])
-                for c in high_risk_clauses_with_pages
-            ]
-            print(
-                f"🚀 DEBUG: BFSI Pipeline - Attempting Sarvam AI first for {len(all_high_risk_texts)} clauses."
-            )
+        if not texts:
+            return simplified_map
 
-            try:
-                print(
-                    f"🚀 DEBUG: Attempting Sarvam AI for {len(all_high_risk_texts)} clauses..."
-                )
-                sarvam_map = await simplify_with_sarvam(all_high_risk_texts, language)
-                simplified_map.update(sarvam_map)
+        print(f"🚀 DEBUG: BFSI Pipeline - Attempting Sarvam AI for {len(texts)} clauses.")
+        try:
+            sarvam_map = await simplify_with_sarvam(texts, language)
+            simplified_map.update(sarvam_map)
 
-                missing_texts = [
-                    txt
-                    for txt in all_high_risk_texts
-                    if txt not in simplified_map or not simplified_map[txt]
-                ]
-                if missing_texts:
-                    print(
-                        f"⚠️ Sarvam AI partially failed ({len(missing_texts)} missing). Falling back to Gemini..."
-                    )
-                    try:
-                        gemini_map = await simplify_with_gemini(missing_texts, language)
-                        simplified_map.update(gemini_map)
-                    except Exception as ge_partial:
-                        print(f"❌ Partial Gemini Fallback Failed: {ge_partial}")
-
-            except Exception as e:
-                print(
-                    f"❌ Sarvam AI Primary Failure ({e}). Falling back to Gemini for all..."
-                )
+            missing_texts = [t for t in texts if t not in simplified_map or not simplified_map[t]]
+            if missing_texts:
+                print(f"⚠️ Sarvam AI partially failed ({len(missing_texts)} missing). Falling back to Gemini...")
                 try:
-                    gemini_map = await simplify_with_gemini(
-                        all_high_risk_texts, language
-                    )
+                    gemini_map = await simplify_with_gemini(missing_texts, language)
                     simplified_map.update(gemini_map)
-                except Exception as ge_full:
-                    print(f"🚨 CRITICAL: Both Sarvam Primary and Gemini Fallback failed! ({ge_full})")
-
-        return await _build_high_risk_response(high_risk_clauses_with_pages, simplified_map, pdf_bytes, total_scanned)
+                except Exception as ge:
+                    print(f"❌ Partial Gemini Fallback Failed: {ge}")
+        except Exception as e:
+            print(f"❌ Sarvam AI Primary Failure ({e}). Falling back to Gemini for all...")
+            try:
+                gemini_map = await simplify_with_gemini(texts, language)
+                simplified_map.update(gemini_map)
+            except Exception as ge_full:
+                print(f"🚨 CRITICAL: Both Sarvam Primary and Gemini Fallback failed! ({ge_full})")
+        return simplified_map
 
     @classmethod
     def analyze_page_aware(
@@ -1411,12 +1402,22 @@ async def _build_high_risk_response(clauses: List[dict], simplified_map: dict, p
         coords = extract_coordinates_from_pdf(pdf_bytes, c["page"], c["text"])
         if not coords:
             coords = [[c["page"], 50, 100, 500, 120]]
-        response_clauses.append(HighRiskClauseAnalysis(id=idx, page=c["page"], original_text=c["text"],
-                                                      simplified=simplified, risk_score=c["score"],
-                                                      highlight_coords=coords))
-    return HighRiskAnalysisResponse(status="ANALYSIS_COMPLETE", pii_result="OK",
-                                  meta={"total_scanned": total, "high_risk_found": len(response_clauses)},
-                                  high_risk_clauses=response_clauses)
+        response_clauses.append(
+            HighRiskClauseAnalysis(
+                id=idx,
+                page=c["page"],
+                original_text=c["text"],
+                simplified=simplified,
+                risk_score=c["score"],
+                highlight_coords=coords,
+            )
+        )
+    return HighRiskAnalysisResponse(
+        status="ANALYSIS_COMPLETE",
+        pii_result="OK",
+        meta={"total_scanned": total, "high_risk_found": len(response_clauses)},
+        high_risk_clauses=response_clauses,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1471,10 +1472,16 @@ async def analyze_upload(
     # ---------- STEP 3: If OK, run High-Risk-Only Analysis Engine ----------
     high_risk_result = await SymbolicAnalysisEngine.analyze_high_risk_only(pages_data, pdf_bytes, language)
 
-    background_tasks.add_task(log_dpo_event, filename=file.filename or "unknown.pdf", status="CLEAN",
-                            details="No sensitive PII detected", processing_time=round(time.time() - start_time, 2),
-                            language_detected=language, unique_hash=unique_hash,
-                            risk_score=f"{high_risk_result.meta.get('high_risk_found', 0)} High Risk Clauses")
+    background_tasks.add_task(
+        log_dpo_event,
+        filename=file.filename or "unknown.pdf",
+        status="CLEAN",
+        details="No sensitive PII detected",
+        processing_time=round(time.time() - start_time, 2),
+        language_detected=language,
+        unique_hash=unique_hash,
+        risk_score=f"{high_risk_result.meta.get('high_risk_found', 0)} High Risk Clauses",
+    )
 
     gc.collect()
     return JSONResponse(content=high_risk_result.model_dump(), media_type="application/json")
@@ -1494,14 +1501,24 @@ def _validate_file(file: UploadFile, pdf_bytes: bytes):
 
 def _handle_blocked_upload(tasks, file, lang, uhash, start, pdf_bytes):
     """Handle the response for a blocked PII upload."""
-    tasks.add_task(log_dpo_event, filename=file.filename or "unknown.pdf", status="BLOCKED",
-                  details="PII Detected (e.g., Credit Card/PAN)", processing_time=round(time.time() - start, 2),
-                  language_detected=lang, unique_hash=uhash, risk_score="CRITICAL (Blocked)")
+    tasks.add_task(
+        log_dpo_event,
+        filename=file.filename or "unknown.pdf",
+        status="BLOCKED",
+        details="PII Detected (e.g., Credit Card/PAN)",
+        processing_time=round(time.time() - start, 2),
+        language_detected=lang,
+        unique_hash=uhash,
+        risk_score="CRITICAL (Blocked)",
+    )
     gc.collect()
-    return HighRiskAnalysisResponse(status="BLOCKED", pii_result="BLOCKED",
-                                  message="Security Alert: Personal details detected.",
-                                  meta={"total_scanned": 0, "high_risk_found": 0},
-                                  high_risk_clauses=[])
+    return HighRiskAnalysisResponse(
+        status="BLOCKED",
+        pii_result="BLOCKED",
+        message="Security Alert: Personal details detected.",
+        meta={"total_scanned": 0, "high_risk_found": 0},
+        high_risk_clauses=[],
+    )
 
 
 @app.get("/analyze/dpo/logs")
