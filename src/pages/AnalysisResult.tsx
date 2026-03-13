@@ -164,9 +164,15 @@ export function AnalysisResult() {
                     </span>
                   </div>
                   <p className="text-sm text-gray-600 mb-2">{clause.original_text}</p>
-                  <div className="p-2 bg-blue-50 rounded text-xs text-blue-900">
-                    {clause.simplified}
-                  </div>
+                  <p
+                    className="p-2 bg-blue-50 rounded text-sm font-medium text-blue-900 leading-relaxed break-words"
+                    dir="auto"
+                  >
+                    {clause.simplified
+                      .replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '')
+                      .replace(/^(here's|here is|this is|simplified|explanation|simplified version).*?:\s*/i, '')
+                      .trim()}
+                  </p>
                 </div>
               ))}
             </div>

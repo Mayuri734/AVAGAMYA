@@ -29,8 +29,9 @@ export function RiskSidebar({
   avgRiskScore,
 }: RiskSidebarProps) {
   // Detect if clause has financial metrics
+  // Detect if clause has financial metrics (Supports Arabic and Devanagari numerals)
   const hasFinancialMetric = (text: string) => {
-    return /(\d+(?:\.\d+)?)\s*%|(?:₹|Rs\.?)\s*(\d+(?:,\d+)*)/.test(text)
+    return /([\d\u0966-\u096F]+(?:\.[\d\u0966-\u096F]+)?)\s*%|(?:₹|Rs\.?)\s*([\d\u0966-\u096F,]+(?:\.[\d\u0966-\u096F]+)?)/.test(text)
   }
   // Sort clauses by risk score (highest first)
   const sortedClauses = useMemo(
@@ -136,7 +137,10 @@ export function RiskSidebar({
                     className="text-sm font-medium text-blue-900 leading-relaxed break-words"
                     dir="auto"
                   >
-                    {clause.simplified.replace(/^(here's|here is|this is|simplified clause|simplified version).*?:\s*/i, '').trim()}
+                    {clause.simplified
+                      .replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '')
+                      .replace(/^(here's|here is|this is|simplified|explanation|simplified version).*?:\s*/i, '')
+                      .trim()}
                   </p>
                 </div>
 

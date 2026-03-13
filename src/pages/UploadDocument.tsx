@@ -61,6 +61,13 @@ export function UploadDocument() {
       setError('Only PDF files are supported.')
       return
     }
+
+    if (f.size === 0) {
+      setFile(null)
+      setError('Empty PDF not allowed.')
+      return
+    }
+
     setFile(f)
   }
 

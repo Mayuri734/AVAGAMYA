@@ -16,11 +16,12 @@ import gc
 import httpx
 from typing import Optional, Set, Tuple, List, Dict, Any
 from supabase import create_client, Client
+from langsmith import traceable, wrappers
 
 import pdfplumber
 import spacy
 import textstat
-from fastapi import FastAPI, File, HTTPException, UploadFile, Query, Form, Body
+from fastapi import FastAPI, File, HTTPException, UploadFile, Query, Form, Body, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -44,8 +45,23 @@ except ImportError:
 # Configure Gemini if API key is available
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 if GEMINI_AVAILABLE and GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-    GEMINI_MODEL = genai.GenerativeModel("gemini-1.5-flash")
+    try:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        # Diagnostic: List models to log what's available
+        print("🔍 DEBUG: Available Gemini Models:")
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                print(f"  - {m.name}")
+        
+        # Use models/ prefix for better reliability with older library versions
+        # Wrap Gemini model for LangSmith tracing
+        raw_model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
+        GEMINI_MODEL = wrappers.wrap_gemini(raw_model)
+        
+        print("✅ Gemini Initialized & Wrapped with LangSmith: models/gemini-1.5-flash-latest")
+    except Exception as e:
+        print(f"❌ Gemini Initialization/Wrapping Failed: {e}")
+        GEMINI_MODEL = None
 else:
     GEMINI_MODEL = None
 
@@ -66,8 +82,8 @@ app.add_middleware(
 )
 
 # Supabase Cloud Configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+SUPABASE_URL = os.getenv("VITE_SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("VITE_SUPABASE_KEY", "")
 
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -355,20 +371,48 @@ def _clean_json_response(response_text: str) -> str:
   return out.strip()
 
 
-def _extract_numbered_lines(response_text: str) -> List[str]:
-  """
-  Extract translated lines from a numbered-list response.
-  Keeps only lines that start with a digit; strips the number prefix (e.g. "1. " or "2. ").
-  """
-  raw_lines = (response_text or "").strip().split("\n")
-  lines = [
-    line.split(".", 1)[-1].strip()
-    for line in raw_lines
-    if line.strip() and line.strip()[0].isdigit()
-  ]
-  return lines
+def scrub_ai_text(text: str) -> str:
+    """
+    Enterprise-grade scrubber: Permanently removes <think> tags (closed/unclosed)
+    and AI conversational chatter across English, Hindi, and Marathi.
+    """
+    if not text:
+        return ""
+    
+    # 1. Strip <think> tags only until its closing tag. 
+    # If unclosed, ONLY strip the <think> tag itself to avoid eating the whole response.
+    # We use (?:</think>|$) but we must be careful: if we match to $, and it's unclosed, we eat everything.
+    # BETTER: If </think> is missing, just remove the <think> tag literal.
+    if "<think>" in text.lower() and "</think>" not in text.lower():
+        text = re.sub(r"<think>", "", text, flags=re.IGNORECASE).strip()
+    else:
+        text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+    
+    # 2. Strip AI conversational artifacts at the BEGINNING (The "Here is the summary" problem)
+    noise_prefixes = [
+        r"^(here's|here is|this is|simplified|explanation|simplified version|audit summary|sure|ok).*?:\s*",
+        r"^(अतः|यह|अनुवाद|सरलीकृत|यहाँ|निश्चित).*?:\s*", # Hindi
+        r"^(येथे|हे|मराठी|सरलीकृत|नक्की).*?:\s*"    # Marathi
+    ]
+    for pattern in noise_prefixes:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.UNICODE).strip()
+    
+    # 3. Strip AI conversational artifacts at the END (The "Let me know if you need more" problem)
+    noise_suffixes = [
+        r"(let me know|if you need|further refinements|hope this helps|this version is).*$",
+        r"(आशा है|जरूरत हो|कृपया बताएं).*$",  # Hindi
+        r"(आशा आहे|गरज असल्यास|सांगा).*$"      # Marathi
+    ]
+    for pattern in noise_suffixes:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.UNICODE | re.MULTILINE).strip()
+    
+    # 4. Clean up leading/trailing markdown characters that often stick around
+    text = text.lstrip("`#*- \n\"").rstrip("` \n\"")
+    
+    return text.strip()
 
 
+@traceable(name="AVAGAMYA_Sarvam_Simplifier")
 async def simplify_with_sarvam(clauses: List[str], language: str) -> dict:
   """
   SARVAM TRACK: Parallel high-reasoning simplification fallback mapped cleanly across clauses.
@@ -388,10 +432,21 @@ async def simplify_with_sarvam(clauses: List[str], language: str) -> dict:
       "api-subscription-key": SARVAM_API_KEY
   }
 
-  prompt_template = f"""You are a Financial Auditor.
+  prompt_template = f"""You are a BFSI Compliance Auditor Agent.
 Task: Simplify this banking clause for a 10th-grade student in {target_language}.
-STRICT RULE: Output ONLY the simplified sentence. Do NOT include any introductory phrases (like 'Here is a simplified...') or closing remarks. Preserve all ₹ and % values."""
 
+Agentic Workflow:
+1. [Auditor Agent]: Simplify the clause into clear, accessible {target_language}.
+2. [Legal Critic Agent]: Verify that no critical financial values (₹, %, Rs.) or specific fee names are lost.
+3. [Safety Refiner]: Remove all reasoning and introductory chat.
+
+STRICT RULES: 
+- Output ONLY the final high-quality simplified sentence in {target_language}.
+- DO NOT use <think> tags.
+- DO NOT include any reasoning, internal monologue, or introductory/closing remarks.
+- ZERO chatter policy."""
+
+  @traceable(name="Sarvam_Single_Clause_Processor")
   async def process_single_clause(client: httpx.AsyncClient, clause: str) -> Tuple[str, str]:
       payload = {
           "model": "sarvam-m", # Upgraded to Sarvam's completions endpoint parameter format
@@ -411,7 +466,8 @@ STRICT RULE: Output ONLY the simplified sentence. Do NOT include any introductor
               # Fix Devanagari character clustering on incoming LLM generation
               clean_text = unicodedata.normalize('NFKC', raw_text.strip())
               # Backend Regex Cleaner (The Safety Net)
-              clean_text = re.sub(r"^(here's|here is|this is|simplified clause|simplified version).*?:\s*", "", clean_text, flags=re.IGNORECASE).strip()
+              clean_text = scrub_ai_text(clean_text)
+              print(f"✅ SARVAM DEBUG: Clause Processed. Length: {len(clean_text)}")
               return (clause, clean_text)
           else:
               return (clause, _fallback_simplified_text(clause))
@@ -452,11 +508,15 @@ async def simplify_with_gemini(clauses: List[str], language: str) -> dict:
     print(f"🚀 DEBUG: Sending {count} clauses to Gemini 1.5 Flash...")
 
     # Token Minimization: No-Chatter prompt
-    prompt_template = f"""You are a Financial Auditor.
-Task: Simplify this banking clause for a 10th-grade student in {target_language}.
-STRICT RULE: Output ONLY the simplified sentence. Do NOT include any introductory phrases (like 'Here is a simplified...') or closing remarks. Preserve all ₹ and % values.
-Output EXACTLY {count} numbered lines.
+    prompt_template = f"""You are a BFSI Compliance Auditor Agent.
+Task: Simplify these banking clauses for a 10th-grade student in {target_language}.
 
+Agentic Workflow:
+1. [Auditor Agent]: Simplify into clear, accessible {target_language}.
+2. [Legal Critic Agent]: Verify no loss of financial values (₹, %, Rs.) or lattice-aware context (specific fee names).
+3. [Safety Refiner]: Purge all reasoning/thought blocks.
+
+STRICT RULE: Output EXACTLY {count} numbered lines of simplified text only. No intro/outro. No <think> tags.
 Clauses:
 {{numbered_clauses}}
 
@@ -506,7 +566,7 @@ Output:"""
       for clause, translation in zip(batch, lines):
         stripped = translation[:500].strip()
         # Backend Regex Cleaner (The Safety Net)
-        stripped = re.sub(r"^(here's|here is|this is|simplified clause|simplified version).*?:\s*", "", stripped, flags=re.IGNORECASE).strip()
+        stripped = scrub_ai_text(stripped)
         
         if not stripped:
             raise RuntimeError("Gemini returned empty or invalid translation strings.")
@@ -1086,22 +1146,13 @@ class SymbolicAnalysisEngine:
     """
     HIGH-RISK-ONLY ANALYSIS PIPELINE WITH SEMANTIC VALIDATOR
     
-    NEW 5-PHASE APPROACH:
-    1. Advanced Clean: Remove junk, tables, headers
-    2. Semantic Validation: Grammar check (verb + subject) + risk keywords
-    3. The Gatekeeper: Filter to confusion > 70
-    4. The Translator: Gemini simplification
-    5. Coordinates: PDF highlighting
-    
-    ELIMINATES: Fragments, junk text, table data, navigation text
-    KEEPS ONLY: Grammatically complete high-risk clauses
-    
-    Returns: Only HIGH RISK clauses with simplified text and coordinates
+    1. Semantic Validation: Grammar check + risk keywords
+    2. The Gatekeeper: Filter to confusion > 70
+    3. The Translator: Sarvam AI (Primary) + Gemini (Fallback)
+    4. Coordinates: PDF highlighting
     """
     
-    # Combine all text for analysis
     all_text = "\n\n".join([text for _, text in pages_data])
-    
     if not all_text.strip():
       return HighRiskAnalysisResponse(
         status="ANALYSIS_COMPLETE",
@@ -1110,85 +1161,64 @@ class SymbolicAnalysisEngine:
         high_risk_clauses=[]
       )
     
-    # PHASE 1-5: Semantic Validation Pipeline
-    # This replaces basic segment_clauses with advanced cleaning + grammar validation
-    # validated_clauses_all is deprecated since we build from pages
-    
-    # Step 2: Map validated clauses to pages IN PARALLEL
     clauses_with_pages = []
-    
-    # [OOM Fix] Process sequentially instead of ProcessPoolExecutor to prevent RAM spikes
     for page in pages_data:
         clauses_with_pages.extend(process_pdf_page_semantic_parallel(page))
     
     total_scanned = len(clauses_with_pages)
     
-    # Step 3: All clauses from semantic validator already pass:
-    #         - Grammar check (verb + subject)
-    #         - Risk keywords check
-    #         - Confusion > 70
-    # So we can directly use them as high-risk clauses
-    
     high_risk_clauses_with_pages = []
-    
     for page_num, clause in clauses_with_pages:
-      # Double-check confusion score (should already be > 70 from validator)
       confusion_score = cls.calculate_confusion_index(clause)
-      
-      if confusion_score > 70:  # Sanity check
+      if confusion_score > 70:
         high_risk_clauses_with_pages.append({
           "page": page_num,
           "text": clause,
           "score": confusion_score
         })
     
-    # Sort clauses strictly descending by risk_score so highest risk is processed first
     high_risk_clauses_with_pages.sort(key=lambda x: x["score"], reverse=True)
     
-    # Step 4: THE HYBRID TRANSLATOR - Gemini (Top 5) + Sarvam AI (Remainder)
     simplified_map = {}
     if high_risk_clauses_with_pages:
-      # Unicode Normalization Guard: Apply NFKC before sending text to engines
-      # Slice top 5 for Gemini Simplification
-      top_5_clauses = high_risk_clauses_with_pages[:5]
-      gemini_texts = [unicodedata.normalize('NFKC', c["text"]) for c in top_5_clauses]
+      all_high_risk_texts = [unicodedata.normalize('NFKC', c["text"]) for c in high_risk_clauses_with_pages]
+      print(f"🚀 DEBUG: BFSI Pipeline - Attempting Sarvam AI first for {len(all_high_risk_texts)} clauses.")
       
-      remainder = high_risk_clauses_with_pages[5:]
-      sarvam_texts = [unicodedata.normalize('NFKC', c["text"]) for c in remainder]
-      
-      print(f"⚖️ DEBUG: Routing Top 5 to Gemini and {len(remainder)} to Sarvam AI.")
-      
-      if gemini_texts:
-          print(f"🚀 DEBUG: Processing {len(gemini_texts)} via Gemini.")
-          try:
-              gemini_map = await simplify_with_gemini(gemini_texts, language)
-              simplified_map.update(gemini_map)
-          except Exception as e:
-              print(f"⚠️ Gemini Failed. Re-routing {len(top_5_clauses)} critical clauses to Sarvam AI...")
-              sarvam_texts = gemini_texts + sarvam_texts
-
-      if sarvam_texts:
-          print(f"🚀 DEBUG: Processing {len(sarvam_texts)} via Sarvam.")
-          sarvam_map = await simplify_with_sarvam(sarvam_texts, language)
+      try:
+          print(f"🚀 DEBUG: Attempting Sarvam AI for {len(all_high_risk_texts)} clauses...")
+          sarvam_map = await simplify_with_sarvam(all_high_risk_texts, language)
           simplified_map.update(sarvam_map)
+          
+          missing_texts = [txt for txt in all_high_risk_texts if txt not in simplified_map or not simplified_map[txt]]
+          if missing_texts:
+              print(f"⚠️ Sarvam AI partially failed ({len(missing_texts)} missing). Falling back to Gemini...")
+              try:
+                  gemini_map = await simplify_with_gemini(missing_texts, language)
+                  simplified_map.update(gemini_map)
+              except Exception as ge_partial:
+                  print(f"❌ Partial Gemini Fallback Failed: {ge_partial}")
+              
+      except Exception as e:
+          print(f"❌ Sarvam AI Primary Failure ({e}). Falling back to Gemini for all...")
+          try:
+              gemini_map = await simplify_with_gemini(all_high_risk_texts, language)
+              simplified_map.update(gemini_map)
+          except Exception as ge_full:
+              print(f"🚨 CRITICAL: Both Sarvam Primary and Gemini Fallback failed! ({ge_full})")
     
-    # Step 5: Extract coordinates and build response
     high_risk_response_clauses = []
-    
     for idx, clause_data in enumerate(high_risk_clauses_with_pages, start=1):
       page_num = clause_data["page"]
       clause_text = clause_data["text"]
       confusion_score = clause_data["score"]
       
-      # Get simplified version
       simplified = simplified_map.get(clause_text, "").strip()
       if not simplified:
         simplified = _fallback_simplified_text(clause_text)
       
-      # Extract coordinates for highlighting
       coords = extract_coordinates_from_pdf(pdf_bytes, page_num, clause_text)
       if not coords:
-        coords = [[page_num, 50, 100, 500, 120]]  # Fallback
+        coords = [[page_num, 50, 100, 500, 120]]
       
       high_risk_response_clauses.append(
         HighRiskClauseAnalysis(
@@ -1330,32 +1360,13 @@ class SymbolicAnalysisEngine:
 
 @app.post("/analyze/upload", response_model=HighRiskAnalysisResponse)
 async def analyze_upload(
+  background_tasks: BackgroundTasks,
   language: str = Query(..., description="User-selected language code"),
   file: UploadFile = File(...),
 ) -> HighRiskAnalysisResponse:
   """
   HIGH-RISK-ONLY Analysis Endpoint for AVAGAMYA v3.
-
-  Pipeline:
-  1. Extract text from PDF page-by-page (with page tracking)
-  2. Run PII security check
-  3. IF BLOCKED: Return error response immediately
-  4. IF OK: Run High-Risk-Only Analysis Engine:
-     - THE GATEKEEPER: Filter to ONLY HIGH RISK clauses (confusion > 70 + 15+ words or financial marker)
-     - THE TRANSLATOR: Simplify high-risk clauses with Gemini 1.5 Flash
-     - Coordinate Extraction: Get bounding boxes for PDF red underlines
-  5. Return structured analysis with:
-     - ONLY HIGH RISK clauses (no LOW/MEDIUM)
-     - Simplified explanations (Grade 10 level)
-     - Page numbers and highlight coordinates for PDF overlay
-     - Meta showing total_scanned vs high_risk_found
-
-  Input:
-  - file: PDF document
-  - language: User language preference (en/hi/mr, used for future localization)
-
-  Output:
-  - HighRiskAnalysisResponse with only high-risk clauses, simplified text, and coordinates
+  UX ISOLATION: Compliance logging is offloaded to BackgroundTasks to minimize latency.
   """
 
   start_time = time.time()
@@ -1380,13 +1391,19 @@ async def analyze_upload(
     del pdf_bytes
     gc.collect()
     raise HTTPException(status_code=413, detail="Payload Too Large. Free tier limit is 5MB.")
-    
+
+  # Extract all text (for PII check + Empty Guardrail)
+  all_text = extract_text_with_layout(pdf_bytes)
+  if not all_text.strip():
+    raise HTTPException(
+      status_code=400,
+      detail='Empty PDF not allowed. Please upload a document with valid content.'
+    )
+
   # Data Integrity - Tamper Proof Hash
   unique_hash = hashlib.sha256(pdf_bytes).hexdigest()
 
   try:
-    # Extract all text (for PII check)
-    all_text = extract_text_with_layout(pdf_bytes)
     # Lattice-aware extraction + sentence healing (tables → contextual rows; body merged)
     pages_data = reconstruct_text_healer(pdf_bytes)
   except Exception as exc:  # pragma: no cover (safety net)
@@ -1410,8 +1427,9 @@ async def analyze_upload(
   # ---------- STEP 2: If BLOCKED, return immediately ----------
   if pii_result.status == "BLOCKED":
     processing_time = round(time.time() - start_time, 2)
-    # Log blocked event to DPO audit database
-    log_dpo_event(
+    # UX Isolation: Background Logging
+    background_tasks.add_task(
+      log_dpo_event,
       filename=file.filename or "unknown.pdf",
       status="BLOCKED",
       details="PII Detected (e.g., Credit Card/PAN)",
@@ -1431,6 +1449,7 @@ async def analyze_upload(
     return HighRiskAnalysisResponse(
       status="BLOCKED",
       pii_result="BLOCKED",
+      message="Security Alert: Personal details detected.",
       meta={"total_scanned": 0, "high_risk_found": 0},
       high_risk_clauses=[]
     )
@@ -1440,7 +1459,6 @@ async def analyze_upload(
   gc.collect()
   
   # ---------- STEP 3: If OK, run High-Risk-Only Analysis Engine ----------
-  # pages_data is lattice-aware + healed (structurally complete sentences)
   high_risk_result = await SymbolicAnalysisEngine.analyze_high_risk_only(
     pages_data, pdf_bytes, language
   )
@@ -1449,8 +1467,9 @@ async def analyze_upload(
   high_risk_count = high_risk_result.meta.get("high_risk_found", 0)
   risk_score_str = f"{high_risk_count} High Risk Clauses" if high_risk_count > 0 else "Low Risk"
   
-  # Log clean event to DPO audit database
-  log_dpo_event(
+  # UX Isolation: Background Logging
+  background_tasks.add_task(
+    log_dpo_event,
     filename=file.filename or "unknown.pdf",
     status="CLEAN",
     details="No sensitive PII detected",
@@ -1571,7 +1590,7 @@ def process_pdf_page_semantic_parallel(page_data: Tuple[int, str]) -> List[Tuple
 
 
 @app.post("/analyze/compliance/audit")
-async def analyze_compliance_audit(file: UploadFile = File(...)):
+async def analyze_compliance_audit(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     start_time = time.time()
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files supported.")
@@ -1606,8 +1625,9 @@ async def analyze_compliance_audit(file: UploadFile = File(...)):
     processing_time = round(time.time() - start_time, 2)
     risk_score_str = f"{high_risk_count} High Risk" if high_risk_count > 0 else "Low Risk"
 
-    # Log to Supabase
-    log_dpo_event(
+    # UX Isolation: Background Logging
+    background_tasks.add_task(
+        log_dpo_event,
         filename=file.filename or "unknown.pdf",
         status="CLEAN" if high_risk_count == 0 else "BLOCKED",
         details=f"Compliance Audit: {high_risk_count} High Risk Clauses",
