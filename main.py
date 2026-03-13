@@ -13,7 +13,6 @@ import httpx
 from datetime import datetime
 from typing import Optional, Set, Tuple, List, Dict
 
-from dotenv import load_dotenv
 from supabase import create_client, Client
 from langsmith import traceable, wrappers
 
