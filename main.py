@@ -576,6 +576,23 @@ Output:"""
   return simplified_map
 
 
+
+def _extract_numbered_lines(text: str) -> List[str]:
+    """
+    Extracts lines that start with a number followed by a period (e.g., "1. text").
+    Used to parse numbered lists from LLM responses.
+    """
+    if not text:
+        return []
+    
+    # Pattern to match: optional whitespace, digit(s), period, space, then capturing the rest of the line
+    pattern = re.compile(r"^\s*\d+\.\s*(.*)$", re.MULTILINE)
+    matches = pattern.findall(text)
+    
+    # Return stripped lines
+    return [m.strip() for m in matches if m.strip()]
+
+
 # ---------------------------------------------------------------------------
 # NER + bank / allowlist helpers
 # ---------------------------------------------------------------------------
@@ -632,7 +649,6 @@ def refresh_dynamic_allowlist(text: str, issuer: Optional[str]) -> None:
   - treat obvious service numbers as allowed contacts
   This is session-scoped (process memory).
   """
-  global ALLOWED_EMAIL_DOMAINS, ALLOWED_CONTACT_NUMBERS
 
   if not issuer or not is_bank_name(issuer):
     return
