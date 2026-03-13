@@ -105,28 +105,34 @@ def _normalize_cell(cell: Optional[str]) -> str:
     return " ".join(str(cell).split())
 
 
-def _contextual_row_sentences(table: List[List[Optional[str]]]) -> List[str]:
+    return sentences
+
+
+def _get_lattice_table_sentences(page: pdfplumber.page.Page) -> List[str]:
+    """Extract sentences from lattice-type tables on a page."""
     sentences: List[str] = []
-    for row in table:
-        if not row:
-            continue
-        header = _normalize_cell(row[0])
-        value = _normalize_cell(row[1]) if len(row) > 1 else ""
-        if not header and not value:
-            continue
-        if header and value:
-            combined = f"{header}: {value}"
-            if combined and combined[-1] not in ".?!":
-                combined += "."
-            sentences.append(combined)
-        elif header:
-            if header[-1] not in ".?!":
-                header += "."
-            sentences.append(header)
-        else:
-            if value[-1] not in ".?!":
-                value += "."
-            sentences.append(value)
+    try:
+        tables = page.find_tables(table_settings=LATTICE_TABLE_SETTINGS)
+        for table in tables:
+            raw = table.extract()
+            if raw:
+                sentences.extend(_contextual_row_sentences(raw))
+    except Exception:
+        pass
+    return sentences
+
+
+def _get_stream_table_sentences(page: pdfplumber.page.Page) -> List[str]:
+    """Extract sentences from stream-type tables as a fallback."""
+    sentences: List[str] = []
+    try:
+        stream_tables = page.extract_tables(table_settings=STREAM_TABLE_SETTINGS)
+        if stream_tables:
+            for raw in stream_tables:
+                if raw:
+                    sentences.extend(_contextual_row_sentences(raw))
+    except Exception:
+        pass
     return sentences
 
 
@@ -231,37 +237,16 @@ def semantic_segment_and_validate(text: str) -> List[str]:
 
 
 def extract_text_page_aware(pdf_bytes: bytes) -> List[Tuple[int, str]]:
+    """Extract text from PDF pages with awareness of tables and layout."""
     pages_data: List[Tuple[int, str]] = []
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
-            table_bboxes: List[Tuple[float, float, float, float]] = []
-            table_sentences: List[str] = []
-
             # 1) Lattice priority
-            try:
-                tables = page.find_tables(table_settings=LATTICE_TABLE_SETTINGS)
-                for table in tables:
-                    table_bboxes.append(table.bbox)
-                    raw = table.extract()
-                    if raw:
-                        table_sentences.extend(_table_rows_to_full_sentences(raw))
-            except Exception:
-                pass
+            table_sentences = _get_lattice_table_sentences(page)
 
             # 2) Fallback stream
             if not table_sentences:
-                try:
-                    stream_tables = page.extract_tables(
-                        table_settings=STREAM_TABLE_SETTINGS
-                    )
-                    if stream_tables:
-                        for raw in stream_tables:
-                            if raw:
-                                table_sentences.extend(
-                                    _table_rows_to_full_sentences(raw)
-                                )
-                except Exception:
-                    pass
+                table_sentences = _get_stream_table_sentences(page)
 
             body = page.extract_text() or ""
             page_parts: List[str] = []
@@ -269,6 +254,7 @@ def extract_text_page_aware(pdf_bytes: bytes) -> List[Tuple[int, str]]:
                 page_parts.append(body.strip())
             if table_sentences:
                 page_parts.append("\n".join(table_sentences))
+
             page_text = "\n\n".join(page_parts) if page_parts else ""
             pages_data.append((page_num, page_text))
     return pages_data

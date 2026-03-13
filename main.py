@@ -247,21 +247,54 @@ def _normalize_text_for_matching(text: str) -> str:
     return normalized.strip()
 
 
+def _clean_word_for_matching(w: str) -> str:
+    """Normalize and clean a single word for matching."""
+    # Normalize Unicode to fix Devanagari character breaking/clustering differences
+    w_norm = unicodedata.normalize("NFKC", w)
+    return re.sub(r"[^\w\u0900-\u097F]", "", w_norm.lower())
+
+
+def _find_exact_sequence(pdf_words: List[list], expected_words: List[str]) -> List[fitz.Rect]:
+    """Search for the exact continuous sequence of words in the PDF."""
+    seq_len = len(expected_words)
+    for i in range(len(pdf_words) - seq_len + 1):
+        window = pdf_words[i: i + seq_len]
+        window_words = [_clean_word_for_matching(w[4]) for w in window]
+        if window_words == expected_words:
+            return [fitz.Rect(w[0], w[1], w[2], w[3]) for w in window]
+    return []
+
+
+def _find_anchor_sequence(pdf_words: List[list], expected_words: List[str]) -> List[fitz.Rect]:
+    """Fallback search using first and last word anchors."""
+    if len(expected_words) < 6:
+        return []
+    start_anchor = expected_words[:3]
+    end_anchor = expected_words[-3:]
+    start_idx, end_idx = -1, -1
+
+    for i in range(len(pdf_words) - 2):
+        if [_clean_word_for_matching(w[4]) for w in pdf_words[i: i + 3]] == start_anchor:
+            start_idx = i
+            break
+    if start_idx != -1:
+        for i in range(start_idx, len(pdf_words) - 2):
+            if [_clean_word_for_matching(w[4]) for w in pdf_words[i: i + 3]] == end_anchor:
+                end_idx = i + 2
+                break
+    if start_idx != -1 and end_idx != -1:
+        return [fitz.Rect(pdf_words[i][0], pdf_words[i][1], pdf_words[i][2], pdf_words[i][3])
+                for i in range(start_idx, end_idx + 1)]
+    return []
+
+
 def extract_coordinates_from_pdf(
     pdf_bytes: bytes,
     page_num: int,
     clause_text: str,
 ) -> Optional[List[List[int]]]:
     """
-    Extract bounding box coordinates for a clause using PyMuPDF (fitz), with
-    robust multi-line support.
-
-    Strategy:
-    - Normalize clause_text into a list of words stripped of punctuation.
-    - Extract all word bounding boxes from the target PDF page.
-    - Search for the continuous sequence of words that matches our normalized clause.
-    - Group matching word rectangles vertically by line (`y0` coordinate matching).
-    - Merge the line-specific rectangles into discrete bounded boxes so highlights never stretch across column gutters.
+    Extract bounding box coordinates for a clause using PyMuPDF (fitz).
     """
     if not PYMUPDF_AVAILABLE:
         return [[int(page_num), 50, 100, 500, 40]]
@@ -270,113 +303,57 @@ def extract_coordinates_from_pdf(
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
             return None
-
         page = doc[page_num - 1]
-
-        # --- 1) Clean and normalize the clause text ---
-        # We remove extra spaces and newlines to find matches that wrap across multiple lines
-        text = (clause_text or "").replace("\n", " ")
-        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"\s+", " ", (clause_text or "").replace("\n", " ")).strip()
         if not text:
             return None
 
         # Normalization for matching
-        def clean_word(w):
-            # Normalize Unicode to fix Devanagari character breaking/clustering differences
-            w_norm = unicodedata.normalize("NFKC", w)
-            return re.sub(r"[^\w\u0900-\u097F]", "", w_norm.lower())
-
-        expected_words = [clean_word(w) for w in text.split() if clean_word(w)]
+        expected_words = [_clean_word_for_matching(w) for w in text.split() if _clean_word_for_matching(w)]
         if not expected_words:
             return None
 
-        # --- 2) Retrieve PDF words and sequence matching ---
-        pdf_words = page.get_text(
-            "words"
-        )  # (x0, y0, x1, y1, word, block_no, line_no, word_no)
-
-        match_rects = []
-        seq_len = len(expected_words)
-
-        for i in range(len(pdf_words) - seq_len + 1):
-            window = pdf_words[i : i + seq_len]
-            window_words = [clean_word(w[4]) for w in window]
-
-            # Exact Fuzzy String Mapping logic
-            if window_words == expected_words:
-                # We found the block! Extract all rects
-                for w in window:
-                    match_rects.append(fitz.Rect(w[0], w[1], w[2], w[3]))
-                break
-
+        pdf_words = page.get_text("words")
+        match_rects = _find_exact_sequence(pdf_words, expected_words)
         if not match_rects:
-            # Anchor-Point Geometric Highlighting: search for first 3 and last 3 words
-            if len(expected_words) >= 6:
-                start_anchor = expected_words[:3]
-                end_anchor = expected_words[-3:]
-
-                start_idx = -1
-                end_idx = -1
-
-                # Find start
-                for i in range(len(pdf_words) - 2):
-                    window = pdf_words[i : i + 3]
-                    if [clean_word(w[4]) for w in window] == start_anchor:
-                        start_idx = i
-                        break
-
-                # Find end
-                if start_idx != -1:
-                    for i in range(start_idx, len(pdf_words) - 2):
-                        window = pdf_words[i : i + 3]
-                        if [clean_word(w[4]) for w in window] == end_anchor:
-                            end_idx = i + 2
-                            break
-
-                if start_idx != -1 and end_idx != -1:
-                    for i in range(start_idx, end_idx + 1):
-                        match_rects.append(
-                            fitz.Rect(
-                                pdf_words[i][0],
-                                pdf_words[i][1],
-                                pdf_words[i][2],
-                                pdf_words[i][3],
-                            )
-                        )
-
+            match_rects = _find_anchor_sequence(pdf_words, expected_words)
         if not match_rects:
             return None
 
-        # --- 3) Geometric merging of all rectangles by line ---
-        # We group words by their vertical y0 axis (with a small fuzziness threshold) to ensure
-        # multi-line paragraphs don't create a massive single box that covers empty gutters.
+        # Group words by line (y0) to ensure multi-line paragraph highlighting is discrete
         lines_dict = {}
         for r in match_rects:
-            # Round y0 to nearest 5 points to group words on the same line
             y_key = round(r.y0 / 5) * 5
-            if y_key not in lines_dict:
-                lines_dict[y_key] = []
-            lines_dict[y_key].append(r)
+            lines_dict.setdefault(y_key, []).append(r)
 
-        final_rects = []
-        for y_key, rects in lines_dict.items():
-            min_x0 = min(r.x0 for r in rects)
-            min_y0 = min(r.y0 for r in rects)
-            max_x1 = max(r.x1 for r in rects)
-            max_y1 = max(r.y1 for r in rects)
-
-            x = int(min_x0)
-            y = int(min_y0)
-            width = int(max_x1 - min_x0)
-            height = int(max_y1 - min_y0) + 2
-
-            final_rects.append([int(page_num), x, y, width, height])
-
-        return final_rects
-
+        return [[int(page_num), int(min(r.x0 for r in line)), int(min(r.y0 for r in line)),
+                 int(max(r.x1 for r in line) - min(r.x0 for r in line)),
+                 int(max(r.y1 for r in line) - min(r.y0 for r in line)) + 2]
+                for line in lines_dict.values()]
     except Exception as e:
         print(f"Error in extract_coordinates: {e}")
         return [[int(page_num), 50, 100, 500, 40]]
+
+
+def _process_regional_clause(clause: str) -> Optional[str]:
+    """Handle regional language clause validation and scoring."""
+    has_risk = has_risk_keywords(clause)
+    has_financial = bool(re.search(r"[₹%०-९]", clause))
+    jargon_found = SymbolicAnalysisEngine.detect_jargon(clause)
+    risk_keyword_count = sum(1 for keyword in RISK_KEYWORDS if keyword in clause.lower())
+
+    if (has_risk and (has_financial or len(jargon_found) > 0)) or (risk_keyword_count >= 2):
+        return clause
+    return None
+
+
+def _process_english_clause(clause: str, threshold: float) -> Optional[str]:
+    """Handle English clause validation and complexity filtering."""
+    if semantic_validator(clause):
+        score = SymbolicAnalysisEngine.calculate_confusion_index(clause)
+        if has_risk_keywords(clause) and score > threshold:
+            return clause
+    return None
 
 
 def _fallback_simplified_text(clause: str) -> str:
@@ -484,7 +461,7 @@ Agentic Workflow:
 2. [Legal Critic Agent]: Verify that no critical financial values (₹, %, Rs.) or specific fee names are lost.
 3. [Safety Refiner]: Remove all reasoning and introductory chat.
 
-STRICT RULES: 
+STRICT RULES:
 - Output ONLY the final high-quality simplified sentence in {target_language}.
 - DO NOT use <think> tags.
 - DO NOT include any reasoning, internal monologue, or introductory/closing remarks.
@@ -552,81 +529,56 @@ async def simplify_with_gemini(clauses: List[str], language: str) -> dict:
     batch_size = 10
 
     for batch_start in range(0, len(clauses), batch_size):
-        batch = clauses[batch_start : batch_start + batch_size]
-        count = len(batch)
-        print(f"🚀 DEBUG: Sending {count} clauses to Gemini 1.5 Flash...")
+        batch = clauses[batch_start: batch_start + batch_size]
+        print(f"🚀 DEBUG: Sending {len(batch)} clauses to Gemini 1.5 Flash...")
 
-        # Token Minimization: No-Chatter prompt
-        prompt_template = f"""You are a BFSI Compliance Auditor Agent.
-Task: Simplify these banking clauses for a 10th-grade student in {target_language}.
-
-Agentic Workflow:
-1. [Auditor Agent]: Simplify into clear, accessible {target_language}.
-2. [Legal Critic Agent]: Verify no loss of financial values (₹, %, Rs.) or lattice-aware context (specific fee names).
-3. [Safety Refiner]: Purge all reasoning/thought blocks.
-
-STRICT RULE: Output EXACTLY {count} numbered lines of simplified text only. No intro/outro. No <think> tags.
-Clauses:
-{{numbered_clauses}}
-
-Output:"""
-
-        numbered_clauses = "\n".join(
-            # Apply NFKC to directly protect Devanagari text inside the prompt payload
-            f"{i}. {unicodedata.normalize('NFKC', c.strip()[:500])}"
-            for i, c in enumerate(batch, start=1)
-        )
-
-        # Enforce UTF-8 encoding implicitly in python strings, but we can explicitly encode/decode if needed
-        # Standard python3 string is Unicode, so it's safe for transmission
-        payload = prompt_template.format(numbered_clauses=numbered_clauses)
-
-        max_retries = 2
-        raw_text = ""
-        success = False
-
-        for attempt in range(max_retries):
-            try:
-                response = GEMINI_MODEL.generate_content(payload)
-                raw_text = (response.text or "").strip()
-                # Fix Devanagari clustering on response
-                raw_text = unicodedata.normalize("NFKC", raw_text)
-                print(f"DEBUG: Gemini Response -> {raw_text[:100]}...")
-                success = True
-                break
-            except Exception as e:
-                error_str = str(e)
-                print(f"❌ GEMINI API CRITICAL ERROR: {error_str}")
-                if "429" in error_str and attempt < max_retries - 1:
-                    await asyncio.sleep(12)
-                else:
-                    break
+        prompt = _build_gemini_prompt(batch, target_language)
+        success, raw_text = await _call_gemini_api(prompt)
 
         if not success:
-            # Trigger fallback on total failure
             raise RuntimeError("Gemini API exhausted retries or failed.")
 
         lines = _extract_numbered_lines(raw_text)
+        if len(lines) != len(batch):
+            raise RuntimeError(f"Gemini output count mismatch: expected {len(batch)}, got {len(lines)}")
 
-        if len(lines) != count:
-            # Fallback for this batch so we don't map mismatched counts
-            raise RuntimeError(
-                f"Gemini output count mismatch: expected {count}, got {len(lines)}"
-            )
-        else:
-            for clause, translation in zip(batch, lines):
-                stripped = translation[:500].strip()
-                # Backend Regex Cleaner (The Safety Net)
-                stripped = scrub_ai_text(stripped)
+        for clause, translation in zip(batch, lines):
+            clean_val = scrub_ai_text(translation[:500].strip())
+            if not clean_val:
+                raise RuntimeError("Gemini returned empty or invalid translation strings.")
+            simplified_map[clause] = clean_val
 
-                if not stripped:
-                    raise RuntimeError(
-                        "Gemini returned empty or invalid translation strings."
-                    )
-                simplified_map[clause] = stripped
-
-    print(f"✅ DEBUG: Gemini successfully simplified {len(simplified_map)} clauses.")
     return simplified_map
+
+
+def _build_gemini_prompt(batch: List[str], target_language: str) -> str:
+    """Construct prompt for Gemini batch simplification."""
+    count = len(batch)
+    numbered_clauses = "\n".join(
+        f"{i}. {unicodedata.normalize('NFKC', c.strip()[:500])}"
+        for i, c in enumerate(batch, start=1)
+    )
+    return f"""You are a BFSI Compliance Auditor Agent.
+Task: Simplify these banking clauses for a 10th-grade student in {target_language}.
+STRICT RULE: Output EXACTLY {count} numbered lines of simplified text only. No intro/outro. No <think> tags.
+Clauses:
+{numbered_clauses}
+Output:"""
+
+
+async def _call_gemini_api(payload: str, max_retries: int = 2) -> Tuple[bool, str]:
+    """Execute Gemini API call with retry logic."""
+    for attempt in range(max_retries):
+        try:
+            response = GEMINI_MODEL.generate_content(payload)
+            return True, unicodedata.normalize("NFKC", (response.text or "").strip())
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                await asyncio.sleep(12)
+            else:
+                print(f"❌ GEMINI API ERROR: {e}")
+                break
+    return False, ""
 
 
 def _extract_numbered_lines(text: str) -> List[str]:
@@ -988,102 +940,38 @@ def semantic_segment_and_validate(
 ) -> List[str]:
     """
     INTEGRATED SEMANTIC VALIDATOR PIPELINE:
-
-    1. Advanced Clean: Remove junk, tables, headers
-    2. Segment: Split into clauses using spaCy
-    3. Validate: Check each clause for grammar (verb + subject)
-    4. Merge: Try to merge fragments with previous clause
-    5. Filter: Keep only clauses with risk keywords + high confusion
-
-    Returns list of validated clauses ready for risk analysis.
+    1. Advanced Clean -> 2. Segment -> 3. Validate -> 4. Merge -> 5. Filter
     """
-    # Phase 1: Advanced Clean
     cleaned_text = advanced_clean(text)
     if not cleaned_text.strip():
         return []
 
-    # Phase 2: Segment using spaCy
     doc = nlp(cleaned_text)
     raw_clauses = [sent.text.strip() for sent in doc.sents]
-
     validated_clauses = []
-    i = 0
 
-    while i < len(raw_clauses):
-        clause = raw_clauses[i]
-
-        # 1. Minimum Word Count Filter: Must have at least 8 words.
+    for clause in raw_clauses:
         if len(clause.split()) < 8:
-            i += 1
             continue
 
-        # Phase 3: Validate grammar or check if Devanagari text is present
         is_regional = bool(re.search(r"[\u0900-\u097F]", clause))
-
         if is_regional:
-            # Regional Path: Strict bypass for English grammar check
-            has_risk = has_risk_keywords(clause)
-
-            # Check for financial marker (₹ or % or indicated numerals) and any Jargon
-            has_financial = bool(re.search(r"[₹%०-९]", clause))
-            jargon_found = SymbolicAnalysisEngine.detect_jargon(clause)
-
-            # Strict logic: Must have Risk AND Financial OR 2+ Risk keywords.
-            risk_keyword_count = sum(
-                1 for keyword in RISK_KEYWORDS if keyword in clause.lower()
-            )
-
-            if (has_risk and (has_financial or len(jargon_found) > 0)) or (
-                risk_keyword_count >= 2
-            ):
-                # Script-Specific Risk Scoring: Bypass textstat entirely
-                confusion_score = 85.0
-                validated_clauses.append(clause)
-
-        elif semantic_validator(clause):
-            # English Path (Unchanged): Valid English clause - calculate confusion score
-            confusion_score = SymbolicAnalysisEngine.calculate_confusion_index(clause)
-
-            # Phase 4: Filter by risk keywords + confusion threshold
-            if has_risk_keywords(clause) and confusion_score > confusion_threshold:
-                validated_clauses.append(clause)
-
+            res = _process_regional_clause(clause)
+            if res:
+                validated_clauses.append(res)
         else:
-            # Invalid English clause (fragment) - try to merge with previous
-            if validated_clauses:
-                # Merge with the last validated clause
+            res = _process_english_clause(clause, confusion_threshold)
+            if res:
+                validated_clauses.append(res)
+            elif validated_clauses:
+                # Merge logic if fragment
                 merged = merge_with_previous(clause, validated_clauses[-1])
-
                 if merged:
-                    merged_is_regional = bool(re.search(r"[\u0900-\u097F]", merged))
-
-                    if merged_is_regional:
-                        # Re-run Regional Path Strict check
-                        if len(merged.split()) >= 8:
-                            merged_risk_count = sum(
-                                1 for kw in RISK_KEYWORDS if kw in merged.lower()
-                            )
-                            merged_fino = bool(re.search(r"[₹%०-९]", merged))
-                            merged_jargon = SymbolicAnalysisEngine.detect_jargon(merged)
-                            if (
-                                has_risk_keywords(merged)
-                                and (merged_fino or len(merged_jargon) > 0)
-                            ) or (merged_risk_count >= 2):
-                                validated_clauses[-1] = merged
-                    else:
-                        # Re-run English Path check
-                        confusion_score = (
-                            SymbolicAnalysisEngine.calculate_confusion_index(merged)
-                        )
-                        if (
-                            has_risk_keywords(merged)
-                            and confusion_score > confusion_threshold
-                        ):
-                            validated_clauses[-1] = merged
-
-            # If merge failed or no previous clause, discard this fragment
-
-        i += 1
+                    m_res = (_process_regional_clause(merged)
+                             if bool(re.search(r"[\u0900-\u097F]", merged))
+                             else _process_english_clause(merged, confusion_threshold))
+                    if m_res:
+                        validated_clauses[-1] = m_res
 
     return validated_clauses
 
@@ -1410,45 +1298,9 @@ class SymbolicAnalysisEngine:
                     )
                     simplified_map.update(gemini_map)
                 except Exception as ge_full:
-                    print(
-                        f"🚨 CRITICAL: Both Sarvam Primary and Gemini Fallback failed! ({ge_full})"
-                    )
+                    print(f"🚨 CRITICAL: Both Sarvam Primary and Gemini Fallback failed! ({ge_full})")
 
-        high_risk_response_clauses = []
-        for idx, clause_data in enumerate(high_risk_clauses_with_pages, start=1):
-            page_num = clause_data["page"]
-            clause_text = clause_data["text"]
-            confusion_score = clause_data["score"]
-
-            simplified = simplified_map.get(clause_text, "").strip()
-            if not simplified:
-                simplified = _fallback_simplified_text(clause_text)
-
-            coords = extract_coordinates_from_pdf(pdf_bytes, page_num, clause_text)
-            if not coords:
-                coords = [[page_num, 50, 100, 500, 120]]
-
-            high_risk_response_clauses.append(
-                HighRiskClauseAnalysis(
-                    id=idx,
-                    page=page_num,
-                    original_text=clause_text,
-                    simplified=simplified,
-                    risk_score=confusion_score,
-                    highlight_coords=coords,
-                )
-            )
-
-        # Step 6: Return filtered response
-        return HighRiskAnalysisResponse(
-            status="ANALYSIS_COMPLETE",
-            pii_result="OK",
-            meta={
-                "total_scanned": total_scanned,
-                "high_risk_found": len(high_risk_response_clauses),
-            },
-            high_risk_clauses=high_risk_response_clauses,
-        )
+        return await _build_high_risk_response(high_risk_clauses_with_pages, simplified_map, pdf_bytes, total_scanned)
 
     @classmethod
     def analyze_page_aware(
@@ -1551,6 +1403,22 @@ class SymbolicAnalysisEngine:
         )
 
 
+async def _build_high_risk_response(clauses: List[dict], simplified_map: dict, pdf_bytes: bytes, total: int):
+    """Construct HighRiskAnalysisResponse from filtered clauses."""
+    response_clauses = []
+    for idx, c in enumerate(clauses, start=1):
+        simplified = simplified_map.get(c["text"], "").strip() or _fallback_simplified_text(c["text"])
+        coords = extract_coordinates_from_pdf(pdf_bytes, c["page"], c["text"])
+        if not coords:
+            coords = [[c["page"], 50, 100, 500, 120]]
+        response_clauses.append(HighRiskClauseAnalysis(id=idx, page=c["page"], original_text=c["text"],
+                                                      simplified=simplified, risk_score=c["score"],
+                                                      highlight_coords=coords))
+    return HighRiskAnalysisResponse(status="ANALYSIS_COMPLETE", pii_result="OK",
+                                  meta={"total_scanned": total, "high_risk_found": len(response_clauses)},
+                                  high_risk_clauses=response_clauses)
+
+
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
@@ -1582,43 +1450,15 @@ async def analyze_upload(
         )
 
     pdf_bytes = await file.read()
-    if not pdf_bytes:
-        raise HTTPException(status_code=400, detail="Empty document.")
-
-    if len(pdf_bytes) > 5 * 1024 * 1024:
-        del pdf_bytes
-        gc.collect()
-        raise HTTPException(
-            status_code=413, detail="Payload Too Large. Free tier limit is 5MB."
-        )
+    _validate_file(file, pdf_bytes)
 
     # Extract all text (for PII check + Empty Guardrail)
     all_text = extract_text_with_layout(pdf_bytes)
     if not all_text.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Empty PDF not allowed. Please upload a document with valid content.",
-        )
+        raise HTTPException(status_code=400, detail="Empty PDF not allowed. Please upload a document with valid content.")
 
-    # Data Integrity - Tamper Proof Hash
     unique_hash = hashlib.sha256(pdf_bytes).hexdigest()
-
-    try:
-        # Lattice-aware extraction + sentence healing (tables → contextual rows; body merged)
-        pages_data = reconstruct_text_healer(pdf_bytes)
-    except Exception as exc:  # pragma: no cover (safety net)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to extract text from PDF: {exc}",
-        ) from exc
-
-    if not all_text.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Could not extract any text from the document.",
-        )
-
-    # Detect issuer from content
+    pages_data = reconstruct_text_healer(pdf_bytes)
     issuer = detect_issuer(all_text)
 
     # ---------- STEP 1: Run PII Security Check ----------
@@ -1626,69 +1466,42 @@ async def analyze_upload(
 
     # ---------- STEP 2: If BLOCKED, return immediately ----------
     if pii_result.status == "BLOCKED":
-        processing_time = round(time.time() - start_time, 2)
-        # UX Isolation: Background Logging
-        background_tasks.add_task(
-            log_dpo_event,
-            filename=file.filename or "unknown.pdf",
-            status="BLOCKED",
-            details="PII Detected (e.g., Credit Card/PAN)",
-            processing_time=processing_time,
-            language_detected=language,
-            unique_hash=unique_hash,
-            risk_score="CRITICAL (Blocked)",
-        )
-
-        # Flush memory immediately upon blocked exit
-        del all_text
-        del pdf_bytes
-        if "pages_data" in locals():
-            del pages_data
-        gc.collect()
-
-        return HighRiskAnalysisResponse(
-            status="BLOCKED",
-            pii_result="BLOCKED",
-            message="Security Alert: Personal details detected.",
-            meta={"total_scanned": 0, "high_risk_found": 0},
-            high_risk_clauses=[],
-        )
-
-    # Free all_text as it is no longer required
-    del all_text
-    gc.collect()
+        return _handle_blocked_upload(background_tasks, file, language, unique_hash, start_time, pdf_bytes)
 
     # ---------- STEP 3: If OK, run High-Risk-Only Analysis Engine ----------
-    high_risk_result = await SymbolicAnalysisEngine.analyze_high_risk_only(
-        pages_data, pdf_bytes, language
-    )
+    high_risk_result = await SymbolicAnalysisEngine.analyze_high_risk_only(pages_data, pdf_bytes, language)
 
-    processing_time = round(time.time() - start_time, 2)
-    high_risk_count = high_risk_result.meta.get("high_risk_found", 0)
-    risk_score_str = (
-        f"{high_risk_count} High Risk Clauses" if high_risk_count > 0 else "Low Risk"
-    )
+    background_tasks.add_task(log_dpo_event, filename=file.filename or "unknown.pdf", status="CLEAN",
+                            details="No sensitive PII detected", processing_time=round(time.time() - start_time, 2),
+                            language_detected=language, unique_hash=unique_hash,
+                            risk_score=f"{high_risk_result.meta.get('high_risk_found', 0)} High Risk Clauses")
 
-    # UX Isolation: Background Logging
-    background_tasks.add_task(
-        log_dpo_event,
-        filename=file.filename or "unknown.pdf",
-        status="CLEAN",
-        details="No sensitive PII detected",
-        processing_time=processing_time,
-        language_detected=language,
-        unique_hash=unique_hash,
-        risk_score=risk_score_str,
-    )
-
-    # Final Garbage Collection Flush
-    del pdf_bytes
-    del pages_data
     gc.collect()
+    return JSONResponse(content=high_risk_result.model_dump(), media_type="application/json")
 
-    return JSONResponse(
-        content=high_risk_result.model_dump(), media_type="application/json"
-    )
+
+def _validate_file(file: UploadFile, pdf_bytes: bytes):
+    """Perform basic file validation."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    if file.content_type not in ("application/pdf", "application/octet-stream"):
+        raise HTTPException(status_code=400, detail="Invalid content type.")
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="Empty document.")
+    if len(pdf_bytes) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Payload Too Large (max 5MB).")
+
+
+def _handle_blocked_upload(tasks, file, lang, uhash, start, pdf_bytes):
+    """Handle the response for a blocked PII upload."""
+    tasks.add_task(log_dpo_event, filename=file.filename or "unknown.pdf", status="BLOCKED",
+                  details="PII Detected (e.g., Credit Card/PAN)", processing_time=round(time.time() - start, 2),
+                  language_detected=lang, unique_hash=uhash, risk_score="CRITICAL (Blocked)")
+    gc.collect()
+    return HighRiskAnalysisResponse(status="BLOCKED", pii_result="BLOCKED",
+                                  message="Security Alert: Personal details detected.",
+                                  meta={"total_scanned": 0, "high_risk_found": 0},
+                                  high_risk_clauses=[])
 
 
 @app.get("/analyze/dpo/logs")

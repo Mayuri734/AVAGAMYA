@@ -48,7 +48,10 @@ def test_confusion_index_english():
     score = SymbolicAnalysisEngine.calculate_confusion_index(text)
     assert score < 40.0
 
-    complex_text = "The implementation of multi-lateral fiscal policies requires comprehensive oversight of decentralized institutional frameworks."  # Hard
+    complex_text = (
+        "The implementation of multi-lateral fiscal policies requires "
+        "comprehensive oversight of decentralized institutional frameworks."
+    )  # Hard
     score_hard = SymbolicAnalysisEngine.calculate_confusion_index(complex_text)
     assert score_hard > 60.0
 
