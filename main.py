@@ -139,10 +139,37 @@ def log_dpo_event(
             "language_detected": language_detected,
             "unique_hash": unique_hash,
             "risk_score": risk_score,
+            "ai_reasoning_metadata": details.get("metadata", {}) if isinstance(details, dict) else {},
         }
+        if isinstance(details, dict):
+            payload["details"] = details.get("text", "")
         supabase.table("compliance_logs").insert(payload).execute()
     except Exception as e:
         print(f"Supabase logging failed: {e}")
+
+
+def _generate_deterministic_fallback(clause: str) -> str:
+    """
+    Generates a deterministic fallback message for a clause, trying to extract a financial metric.
+    """
+    # Defensive regex for currencies and percentages
+    metrics = re.findall(r"(\d+(?:\.\d+)?\s*(?:%|₹|Rs|INR|days|months|years))", clause, re.IGNORECASE)
+    if metrics:
+        return f"Complex Clause: Manual review recommended. (Contains: {', '.join(metrics)})"
+    
+    # Check for keywords if regex fails
+    lower = clause.lower()
+    if "interest" in lower or "%" in lower:
+        return "Complex Clause: Manual review recommended. (Interest/Rate related)"
+    if "fee" in lower or "charge" in lower or "₹" in lower:
+        return "Complex Clause: Manual review recommended. (Fee/Charge related)"
+    
+    return "Complex Clause: Manual review recommended. Data integrity remains in original document."
+
+
+def _fallback_simplified_text(clause: str) -> str:
+    """Standard safety fallback for all failed AL/LLM operations."""
+    return f"Simplification unavailable. Please refer to original text: {clause[:100]}..."
 
 
 @app.on_event("startup")
@@ -453,131 +480,97 @@ async def simplify_with_sarvam(clauses: List[str], language: str) -> dict:
         "api-subscription-key": SARVAM_API_KEY,
     }
 
-    prompt_template = f"""You are a BFSI Compliance Auditor Agent.
-Task: Simplify this banking clause for a 10th-grade student in {target_language}.
+    prompt_template = f"You are a BFSI Compliance Auditor Agent. Simplify this banking clause for a 10th-grade student in {target_language}. Output ONLY the simplified sentence."
+    critic_template = "Compare: Original: {original} vs Simplified: {simplified}. Has any financial data (₹, %, days) been lost? Output ONLY 'PASS' or 'FAIL'."
 
-Agentic Workflow:
-1. [Auditor Agent]: Simplify the clause into clear, accessible {target_language}.
-2. [Legal Critic Agent]: Verify that no critical financial values (₹, %, Rs.) or specific fee names are lost.
-3. [Safety Refiner]: Remove all reasoning and introductory chat.
-
-STRICT RULES:
-- Output ONLY the final high-quality simplified sentence in {target_language}.
-- DO NOT use <think> tags.
-- DO NOT include any reasoning, internal monologue, or introductory/closing remarks.
-- ZERO chatter policy."""
-
-    @traceable(name="Sarvam_Single_Clause_Processor")
-    async def process_single_clause(
-        client: httpx.AsyncClient, clause: str
-    ) -> Tuple[str, str]:
-        payload = {
-            "model": "sarvam-m",  # Upgraded to Sarvam's completions endpoint parameter format
-            "messages": [
-                {"role": "system", "content": prompt_template},
-                {"role": "user", "content": clause},
-            ],
-            "temperature": 0.3,
-        }
+    async def process_single_clause(client: httpx.AsyncClient, clause: str) -> Tuple[str, str]:
         try:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            raw_text = (
-                data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            )
+            # Step 1: Auditor
+            payload = {"model": "sarvam-m", "messages": [{"role": "system", "content": prompt_template}, {"role": "user", "content": clause}], "temperature": 0.3}
+            resp = await client.post(url, json=payload, headers=headers)
+            simplified = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
-            if raw_text:
-                # Fix Devanagari character clustering on incoming LLM generation
-                clean_text = unicodedata.normalize("NFKC", raw_text.strip())
-                # Backend Regex Cleaner (The Safety Net)
-                clean_text = scrub_ai_text(clean_text)
-                print(f"✅ SARVAM DEBUG: Clause Processed. Length: {len(clean_text)}")
-                return (clause, clean_text)
-            else:
-                return (clause, _fallback_simplified_text(clause))
+            # Step 2: Critic
+            c_payload = {"model": "sarvam-m", "messages": [{"role": "system", "content": critic_template.format(original=clause, simplified=simplified)}], "temperature": 0.0}
+            c_resp = await client.post(url, json=c_payload, headers=headers)
+            if "PASS" in c_resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip().upper():
+                return (clause, scrub_ai_text(simplified))
+
+            # Step 3: Retry
+            print(f"⚠️ Handshake FAIL: {clause[:30]}...")
+            r_payload = {"model": "sarvam-m", "messages": [{"role": "system", "content": prompt_template + " CORRECTION: Do not lose ₹ or %."}, {"role": "user", "content": clause}], "temperature": 0.2}
+            r_resp = await client.post(url, json=r_payload, headers=headers)
+            r_simplified = r_resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            return (clause, scrub_ai_text(r_simplified))
         except Exception as e:
-            print(f"❌ SARVAM COMPLETION ERROR: {e}")
+            print(f"❌ SARVAM AGENT ERROR: {e}")
             return (clause, _fallback_simplified_text(clause))
 
     async with httpx.AsyncClient(timeout=45.0) as client:
-        # Fire all clause translation requests simultaneously
-        tasks = [process_single_clause(client, clause) for clause in clauses]
-        results = await asyncio.gather(*tasks)
-
-        for clause_key, simplified_val in results:
-            sarvam_map[clause_key] = simplified_val
-
+        results = await asyncio.gather(*[process_single_clause(client, c) for c in clauses])
+        for k, v in results:
+            sarvam_map[k] = v
     return sarvam_map
 
 
 async def simplify_with_gemini(clauses: List[str], language: str) -> dict:
-    """
-    NEURAL TRACK: Batch simplification using Gemini 1.5 Flash.
-    Quota-Safe logic with dynamic numbering and resilient async retries.
-    """
-    if not GEMINI_AVAILABLE or not GOOGLE_API_KEY or GEMINI_MODEL is None:
-        raise RuntimeError("Gemini is unavailable or not configured.")
-
-    if not clauses:
-        return {}
+    """NEURAL TRACK: Batch simplification with Judge-Agent verification."""
+    if not GEMINI_AVAILABLE or not GEMINI_MODEL:
+        return {c: _fallback_simplified_text(c) for c in clauses}
 
     lang_map = {"en": "English", "hi": "Hindi", "mr": "Marathi"}
-    target_language = lang_map.get((language or "").strip().lower(), "English")
+    target_lang = lang_map.get(language, "English")
+    simplified_map = {}
+    
+    for i in range(0, len(clauses), 10):
+        batch = clauses[i:i+10]
+        
+        # 1. Auditor
+        p = _build_gemini_prompt(batch, target_lang)
+        s, raw = await _call_gemini_api(p)
+        if not s: continue
+        simps = _extract_numbered_lines(raw)
+        if len(simps) != len(batch): continue
 
-    simplified_map: Dict[str, str] = {}
-    batch_size = 10
+        # 2. Critic
+        cp = _build_gemini_critic_prompt(batch, simps)
+        cs, craw = await _call_gemini_api(cp)
+        verts = _extract_numbered_lines(craw) if cs else ["FAIL"] * len(batch)
 
-    for batch_start in range(0, len(clauses), batch_size):
-        batch = clauses[batch_start: batch_start + batch_size]
-        print(f"🚀 DEBUG: Sending {len(batch)} clauses to Gemini 1.5 Flash...")
-
-        prompt = _build_gemini_prompt(batch, target_language)
-        success, raw_text = await _call_gemini_api(prompt)
-
-        if not success:
-            raise RuntimeError("Gemini API exhausted retries or failed.")
-
-        lines = _extract_numbered_lines(raw_text)
-        if len(lines) != len(batch):
-            raise RuntimeError(f"Gemini output count mismatch: expected {len(batch)}, got {len(lines)}")
-
-        for clause, translation in zip(batch, lines):
-            clean_val = scrub_ai_text(translation[:500].strip())
-            if not clean_val:
-                raise RuntimeError("Gemini returned empty or invalid translation strings.")
-            simplified_map[clause] = clean_val
+        # 3. Handle Results
+        for idx, (cl, sm) in enumerate(zip(batch, simps)):
+            v = verts[idx].upper() if idx < len(verts) else "FAIL"
+            if "PASS" in v:
+                simplified_map[cl] = scrub_ai_text(sm)
+            else:
+                print(f"⚠️ Gemini Judge FAIL: {cl[:30]}")
+                # Single Correction Attempt
+                rp = f"Original: {cl}\nSimplify for 10th grade in {target_lang}. CORRECTION: Keep all ₹ and % values."
+                rs, rt = await _call_gemini_api(rp)
+                simplified_map[cl] = scrub_ai_text(rt) if rs else _fallback_simplified_text(cl)
 
     return simplified_map
 
 
-def _build_gemini_prompt(batch: List[str], target_language: str) -> str:
-    """Construct prompt for Gemini batch simplification."""
-    count = len(batch)
-    numbered_clauses = "\n".join(
-        f"{i}. {unicodedata.normalize('NFKC', c.strip()[:500])}"
-        for i, c in enumerate(batch, start=1)
-    )
-    return f"""You are a BFSI Compliance Auditor Agent.
-Task: Simplify these banking clauses for a 10th-grade student in {target_language}.
-STRICT RULE: Output EXACTLY {count} numbered lines of simplified text only. No intro/outro. No <think> tags.
-Clauses:
-{numbered_clauses}
-Output:"""
+def _build_gemini_critic_prompt(origs: List[str], simps: List[str]) -> str:
+    pairs = "\n".join([f"{i}. [Orig]: {o[:200]} [Simp]: {s[:200]}" for i, (o, s) in enumerate(zip(origs, simps), 1)])
+    return f"Verify {len(origs)} pairs. Output ONLY {len(origs)} numbered lines with PASS or FAIL if numerical data is lost.\nPairs:\n{pairs}\nOutput:"
 
 
-async def _call_gemini_api(payload: str, max_retries: int = 2) -> Tuple[bool, str]:
+def _build_gemini_prompt(batch: List[str], lang: str) -> str:
+    numbered = "\n".join([f"{i}. {c[:500]}" for i, c in enumerate(batch, 1)])
+    return f"Simplify these {len(batch)} clauses for a 10th-grade student in {lang}. Output exactly {len(batch)} numbered lines.\n{numbered}\nOutput:"
+
+
+async def _call_gemini_api(payload: str, retries: int = 2) -> Tuple[bool, str]:
     """Execute Gemini API call with retry logic."""
-    for attempt in range(max_retries):
+    for a in range(retries):
         try:
-            response = GEMINI_MODEL.generate_content(payload)
-            return True, unicodedata.normalize("NFKC", (response.text or "").strip())
+            res = GEMINI_MODEL.generate_content(payload)
+            return True, unicodedata.normalize("NFKC", (res.text or "").strip())
         except Exception as e:
-            if "429" in str(e) and attempt < max_retries - 1:
-                await asyncio.sleep(12)
-            else:
-                print(f"❌ GEMINI API ERROR: {e}")
-                break
+            if "429" in str(e): await asyncio.sleep(10)
+            else: break
     return False, ""
 
 
