@@ -65,8 +65,7 @@ jobs:
       # 4. Backend Logic Tests (Quality Gate 2)
       - name: Run Pytest (Unit & Integration)
         run: |
-          python -m pytest tests/test_backend_units.py
-          python -m pytest tests/backend/test_symbolic_engine.py
+          python -m pytest tests/backend/
 
       # 5. Service Orchestration for E2E
       - name: Start Backend Server
