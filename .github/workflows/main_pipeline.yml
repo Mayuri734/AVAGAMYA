@@ -89,8 +89,7 @@ jobs:
 
       # 6. E2E Integration Tests (Quality Gate 3)
       - name: Run Playwright E2E Tests
-        run: npx playwright test tests/frontend/integration.spec.ts --workers=1
-
+        run: npx playwright test tests/frontend --workers=1
       # 7. Final Cleanup (Implicit in GitHub Actions)
       - name: Upload Test Results
         if: always()
