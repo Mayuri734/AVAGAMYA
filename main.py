@@ -189,7 +189,6 @@ def _fallback_simplified_text(clause: str) -> str:
     return f"Simplification unavailable. Please refer to original text: {clause[:100]}..."
 
 
-
 # ---------------------------------------------------------------------------
 # NLP & Regex setup
 # ---------------------------------------------------------------------------
