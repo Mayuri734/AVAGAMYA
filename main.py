@@ -12,9 +12,11 @@ import httpx
 
 from datetime import datetime
 from typing import Optional, Set, Tuple, List, Dict
+from contextlib import asynccontextmanager
 
 from supabase import create_client, Client
-from langsmith import traceable, wrappers
+from langsmith import traceable
+from langsmith.wrappers import wrap_gemini
 
 import spacy
 import textstat
@@ -47,7 +49,7 @@ except ImportError:
 
 # Gemini API (optional, graceful fallback if not configured)
 try:
-    import google.generativeai as genai
+    from google import genai
 
     GEMINI_AVAILABLE = True
 except ImportError:
@@ -67,7 +69,7 @@ if GEMINI_AVAILABLE and GOOGLE_API_KEY:
         # Use models/ prefix for better reliability with older library versions
         # Wrap Gemini model for LangSmith tracing
         raw_model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
-        GEMINI_MODEL = wrappers.wrap_gemini(raw_model)
+        GEMINI_MODEL = wrap_gemini(raw_model)
 
         print(
             "✅ Gemini Initialized & Wrapped with LangSmith: models/gemini-1.5-flash-latest"
@@ -84,7 +86,22 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
 # App & CORS
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="AVAGAMYA Security Ingestion Layer")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Handle application lifespan events.
+    Replaces deprecated @app.on_event('startup') logic.
+    """
+    # Startup: Perform any initialization here if needed
+    yield
+    # Shutdown: Perform any cleanup here if needed
+
+
+app = FastAPI(
+    title="AVAGAMYA Security Ingestion Layer",
+    lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -171,11 +188,6 @@ def _fallback_simplified_text(clause: str) -> str:
     """Standard safety fallback for all failed AL/LLM operations."""
     return f"Simplification unavailable. Please refer to original text: {clause[:100]}..."
 
-
-@app.on_event("startup")
-async def startup_event():
-    """FastAPI startup configurations."""
-    pass
 
 
 # ---------------------------------------------------------------------------
