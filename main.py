@@ -156,14 +156,14 @@ def _generate_deterministic_fallback(clause: str) -> str:
     metrics = re.findall(r"(\d+(?:\.\d+)?\s*(?:%|₹|Rs|INR|days|months|years))", clause, re.IGNORECASE)
     if metrics:
         return f"Complex Clause: Manual review recommended. (Contains: {', '.join(metrics)})"
-    
+
     # Check for keywords if regex fails
     lower = clause.lower()
     if "interest" in lower or "%" in lower:
         return "Complex Clause: Manual review recommended. (Interest/Rate related)"
     if "fee" in lower or "charge" in lower or "₹" in lower:
         return "Complex Clause: Manual review recommended. (Fee/Charge related)"
-    
+
     return "Complex Clause: Manual review recommended. Data integrity remains in original document."
 
 
@@ -383,19 +383,6 @@ def _process_english_clause(clause: str, threshold: float) -> Optional[str]:
     return None
 
 
-def _fallback_simplified_text(clause: str) -> str:
-    """
-    Build a deterministic fallback message that references the detected financial metric
-    so the UI always has a non-empty 'simplified' field for high-risk clauses.
-    """
-    metric = SymbolicAnalysisEngine.detect_financial_metrics(clause)  # type: ignore[name-defined]
-    if metric:
-        return f"Detailed analysis pending. Please check original text for {metric}."
-    return (
-        "Detailed analysis pending. Please check original text for key fees and rates."
-    )
-
-
 def _clean_json_response(response_text: str) -> str:
     """
     Robust cleaner for Neural Track: strip AI chatter and markdown so only raw JSON remains.
@@ -480,25 +467,36 @@ async def simplify_with_sarvam(clauses: List[str], language: str) -> dict:
         "api-subscription-key": SARVAM_API_KEY,
     }
 
-    prompt_template = f"You are a BFSI Compliance Auditor Agent. Simplify this banking clause for a 10th-grade student in {target_language}. Output ONLY the simplified sentence."
-    critic_template = "Compare: Original: {original} vs Simplified: {simplified}. Has any financial data (₹, %, days) been lost? Output ONLY 'PASS' or 'FAIL'."
+    prompt_template = (
+        "You are a BFSI Compliance Auditor Agent. "
+        f"Simplify this banking clause for a 10th-grade student in {target_language}. "
+        "Output ONLY the simplified sentence."
+    )
+    critic_template = (
+        "Compare: Original: {original} vs Simplified: {simplified}. "
+        "Has any financial data (₹, %, days) been lost? Output ONLY 'PASS' or 'FAIL'."
+    )
 
     async def process_single_clause(client: httpx.AsyncClient, clause: str) -> Tuple[str, str]:
         try:
             # Step 1: Auditor
-            payload = {"model": "sarvam-m", "messages": [{"role": "system", "content": prompt_template}, {"role": "user", "content": clause}], "temperature": 0.3}
+            auditor_messages = [{"role": "system", "content": prompt_template}, {"role": "user", "content": clause}]
+            payload = {"model": "sarvam-m", "messages": auditor_messages, "temperature": 0.3}
             resp = await client.post(url, json=payload, headers=headers)
             simplified = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
             # Step 2: Critic
-            c_payload = {"model": "sarvam-m", "messages": [{"role": "system", "content": critic_template.format(original=clause, simplified=simplified)}], "temperature": 0.0}
+            critic_msg = [{"role": "system", "content": critic_template.format(original=clause, simplified=simplified)}]
+            c_payload = {"model": "sarvam-m", "messages": critic_msg, "temperature": 0.0}
             c_resp = await client.post(url, json=c_payload, headers=headers)
             if "PASS" in c_resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip().upper():
                 return (clause, scrub_ai_text(simplified))
 
             # Step 3: Retry
             print(f"⚠️ Handshake FAIL: {clause[:30]}...")
-            r_payload = {"model": "sarvam-m", "messages": [{"role": "system", "content": prompt_template + " CORRECTION: Do not lose ₹ or %."}, {"role": "user", "content": clause}], "temperature": 0.2}
+            correction_msg = prompt_template + " CORRECTION: Do not lose ₹ or %."
+            retry_msg = [{"role": "system", "content": correction_msg}, {"role": "user", "content": clause}]
+            r_payload = {"model": "sarvam-m", "messages": retry_msg, "temperature": 0.2}
             r_resp = await client.post(url, json=r_payload, headers=headers)
             r_simplified = r_resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             return (clause, scrub_ai_text(r_simplified))
@@ -521,16 +519,17 @@ async def simplify_with_gemini(clauses: List[str], language: str) -> dict:
     lang_map = {"en": "English", "hi": "Hindi", "mr": "Marathi"}
     target_lang = lang_map.get(language, "English")
     simplified_map = {}
-    
+
     for i in range(0, len(clauses), 10):
         batch = clauses[i:i+10]
-        
         # 1. Auditor
         p = _build_gemini_prompt(batch, target_lang)
         s, raw = await _call_gemini_api(p)
-        if not s: continue
+        if not s:
+            continue
         simps = _extract_numbered_lines(raw)
-        if len(simps) != len(batch): continue
+        if len(simps) != len(batch):
+            continue
 
         # 2. Critic
         cp = _build_gemini_critic_prompt(batch, simps)
@@ -554,12 +553,17 @@ async def simplify_with_gemini(clauses: List[str], language: str) -> dict:
 
 def _build_gemini_critic_prompt(origs: List[str], simps: List[str]) -> str:
     pairs = "\n".join([f"{i}. [Orig]: {o[:200]} [Simp]: {s[:200]}" for i, (o, s) in enumerate(zip(origs, simps), 1)])
-    return f"Verify {len(origs)} pairs. Output ONLY {len(origs)} numbered lines with PASS or FAIL if numerical data is lost.\nPairs:\n{pairs}\nOutput:"
+    instruction = (
+        f"Verify {len(origs)} pairs. Output ONLY {len(origs)} numbered lines "
+        "with PASS or FAIL if numerical data is lost."
+    )
+    return f"{instruction}\nPairs:\n{pairs}\nOutput:"
 
 
 def _build_gemini_prompt(batch: List[str], lang: str) -> str:
     numbered = "\n".join([f"{i}. {c[:500]}" for i, c in enumerate(batch, 1)])
-    return f"Simplify these {len(batch)} clauses for a 10th-grade student in {lang}. Output exactly {len(batch)} numbered lines.\n{numbered}\nOutput:"
+    instruction = f"Simplify these {len(batch)} clauses for a 10th-grade student in {lang}."
+    return f"{instruction} Output exactly {len(batch)} numbered lines.\n{numbered}\nOutput:"
 
 
 async def _call_gemini_api(payload: str, retries: int = 2) -> Tuple[bool, str]:
@@ -569,8 +573,10 @@ async def _call_gemini_api(payload: str, retries: int = 2) -> Tuple[bool, str]:
             res = GEMINI_MODEL.generate_content(payload)
             return True, unicodedata.normalize("NFKC", (res.text or "").strip())
         except Exception as e:
-            if "429" in str(e): await asyncio.sleep(10)
-            else: break
+            if "429" in str(e):
+                await asyncio.sleep(10)
+            else:
+                break
     return False, ""
 
 
