@@ -15,7 +15,7 @@ from typing import Optional, Set, Tuple, List, Dict
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-load_dotenv()
+
 
 from supabase import create_client, Client
 from langsmith import traceable
@@ -41,6 +41,7 @@ from compliance_engine import (
     extract_text_with_layout,
     reconstruct_text_healer,
 )
+load_dotenv()
 
 # PyMuPDF (optional, graceful fallback if not configured)
 try:
