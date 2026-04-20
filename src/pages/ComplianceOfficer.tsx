@@ -7,6 +7,7 @@ import autoTable from 'jspdf-autotable'
 import { notoSansDevanagariBase64 } from '../assets/NotoSansDevanagari'
 import axios from 'axios'
 import type { AxiosProgressEvent } from 'axios'
+import { JiraFloatingWidget } from '../components/JiraFloatingWidget'
 
 interface ClauseResult {
     id: string
@@ -437,6 +438,7 @@ export function ComplianceOfficer() {
                     </AnimatePresence>
                 </div>
             </div>
+            {activeTab === 'audit' && <JiraFloatingWidget />}
         </div>
     )
 }

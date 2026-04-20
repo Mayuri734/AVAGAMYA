@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Lock, Menu, X, AlertCircle, LogOut } from 'lucide-react'
+import { Lock, Menu, X, AlertCircle, LogOut, Calculator } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { FinancialSimulatorModal } from './FinancialSimulatorModal'
 
 const navLinks = [
   { to: '/', label: 'Home' },
@@ -14,6 +15,7 @@ export function Navbar() {
   const location = useLocation()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [isSimulatorOpen, setIsSimulatorOpen] = useState(false)
 
   // Guard states for secure modules
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
@@ -68,6 +70,16 @@ export function Navbar() {
                 </Link>
               )
             })}
+            
+            {/* SIMULATOR TRIGGER (Architect Standard) */}
+            {!isUserLoggedIn && (
+              <button 
+                onClick={() => setIsSimulatorOpen(true)}
+                className="flex items-center gap-2 text-sm font-bold text-slate-grey hover:text-vibrant-orange transition-colors"
+              >
+                <Calculator className="w-4 h-4" /> Simulator
+              </button>
+            )}
           </div>
 
           {/* Right Action Button */}
@@ -129,6 +141,19 @@ export function Navbar() {
                   )
                 })}
 
+                {/* SIMULATOR TRIGGER MOBILE */}
+                {!isUserLoggedIn && (
+                  <button 
+                    onClick={() => {
+                      setMobileOpen(false)
+                      setIsSimulatorOpen(true)
+                    }}
+                    className="flex items-center min-h-[44px] px-4 py-3 rounded-xl text-base font-bold text-slate-grey hover:bg-slate-50 transition-colors"
+                  >
+                    <Calculator className="w-5 h-5 mr-3" /> Simulator
+                  </button>
+                )}
+
                 {/* Right Action Button for Mobile */}
                 <div className="pt-4 mt-2 border-t border-slate-100">
                   {isUserLoggedIn ? (
@@ -175,6 +200,11 @@ export function Navbar() {
           </div>
         </div>
       )}
+      {/* FINANCIAL SIMULATOR MODAL */}
+      <FinancialSimulatorModal 
+        isOpen={isSimulatorOpen} 
+        onClose={() => setIsSimulatorOpen(false)} 
+      />
     </>
   )
 }

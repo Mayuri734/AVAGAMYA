@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { FileText, Shield, Clock, CheckCircle, LayoutDashboard, Award, Download, Lock } from 'lucide-react'
+import { FileText, Shield, Clock, CheckCircle, LayoutDashboard, Award, Download, Lock, BarChart3 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { AuditorAnalyticsModal } from '../components/AuditorAnalyticsModal'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 
@@ -25,6 +26,7 @@ export function AuditorDashboard() {
   const [policyName, setPolicyName] = useState('HDFC Credit Card MITC v2.4')
   const [auditDate] = useState(new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }))
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false)
   const certificateRef = useRef<HTMLDivElement>(null)
 
   // --- DATA STATE ---
@@ -248,6 +250,23 @@ export function AuditorDashboard() {
           </AnimatePresence>
         </div>
       </div>
+
+      {/* FLOATING ANALYTICS BUTTON (Contextual) */}
+      {activeTab === 'dashboard' && (
+        <button
+          onClick={() => setIsAnalyticsOpen(true)}
+          className="fixed bottom-10 right-10 z-50 flex items-center gap-3 px-6 py-4 bg-blue-600 text-white rounded-2xl font-black shadow-2xl hover:scale-105 active:scale-95 transition-all group"
+        >
+          <BarChart3 className="w-6 h-6 group-hover:animate-bounce" />
+          <span className="hidden md:inline">Generate Visual Report</span>
+        </button>
+      )}
+
+      {/* ANALYTICS MODAL */}
+      <AuditorAnalyticsModal 
+        isOpen={isAnalyticsOpen} 
+        onClose={() => setIsAnalyticsOpen(false)} 
+      />
     </div>
   )
 }
