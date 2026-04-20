@@ -15,8 +15,6 @@ from typing import Optional, Set, Tuple, List, Dict
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-
-
 from supabase import create_client, Client
 from langsmith import traceable
 from langsmith.wrappers import wrap_gemini
@@ -228,7 +226,6 @@ def cache_set(
         print(f"💾 CACHE WRITE | hash={file_hash[:12]}... | lang={language}")
     except Exception as e:
         print(f"⚠️  Cache write failed (non-critical): {e}")
-
 
 
 def _generate_deterministic_fallback(clause: str) -> str:
@@ -1678,7 +1675,7 @@ async def get_audit_summary():
     try:
         if not supabase:
             return {"total_processed": 0, "compliance_percentage": 0.0, "avg_processing_time_last_50": 0.0}
-        
+
         # Total Processed Count
         count_resp = (
             supabase.table("compliance_logs").select("*", count="exact").execute()
@@ -1885,6 +1882,7 @@ async def analyze_compliance_sandbox(request: SandboxRequest) -> SandboxResponse
 class JiraEscalateRequest(BaseModel):
     notes: str
 
+
 @app.post("/analyze/compliance/escalate")
 async def analyze_compliance_escalate(request: JiraEscalateRequest):
     """
@@ -1892,7 +1890,7 @@ async def analyze_compliance_escalate(request: JiraEscalateRequest):
     This enables real-time synchronization with legal team dashboards.
     """
     ticket_id = f"LGL-{uuid.uuid4().hex[:4].upper()}"
-    
+
     if supabase:
         try:
             supabase.table("jira_escalations").insert({
