@@ -1,4 +1,4 @@
-# AVAGAMYA 🔍
+# AVAGAMYA 
 > **Don't Sign What You Don't Understand** — AI-powered BFSI document compliance analyzer that detects high-risk clauses, translates legal jargon, and highlights them directly on the PDF in 12+ Indian languages.
 
 [![CI/CD](https://github.com/Mayuri734/AVAGAMYA/actions/workflows/main_pipeline.yml/badge.svg)](https://github.com/Mayuri734/AVAGAMYA/actions/workflows/main_pipeline.yml)
@@ -145,16 +145,6 @@ Secrets required in GitHub: `GOOGLE_API_KEY`, `SARVAM_API_KEY`, `VITE_SUPABASE_U
 | `POST` | `/analyze/compliance/sandbox` | Live risk velocity for draft text |
 | `GET` | `/analyze/dpo/logs` | Recent DPO audit log stream |
 | `GET` | `/audit/summary` | Real-time compliance dashboard stats |
-
----
-
-## 🎨 Brand
-
-| Color | Hex | Usage |
-|-------|-----|-------|
-| Deep Blue | `#022549` | Primary background |
-| Vibrant Orange | `#FC5923` | CTA / highlights |
-| Slate Grey | `#394A53` | Secondary text |
 
 **Typography**: Playfair Display (headings) · Inter (body)
 
