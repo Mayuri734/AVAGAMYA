@@ -1,5 +1,6 @@
-import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
+import { motion } from 'framer-motion'
+
 
 export function ModuleSelector() {
   const navigate = useNavigate()
@@ -26,9 +27,11 @@ export function ModuleSelector() {
       color: 'bg-purple-50 border-purple-200 hover:bg-purple-100',
       onClick: () => navigate('/staff/auditor/login'),
     },
+
   ]
 
   return (
+    <>
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8 pt-24">
       <div className="max-w-6xl mx-auto">
         <motion.div
@@ -45,7 +48,7 @@ export function ModuleSelector() {
           </p>
         </motion.div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-20">
           {modules.map((module, index) => {
             return (
               <motion.div
@@ -60,13 +63,15 @@ export function ModuleSelector() {
   
   {/* CONTAINER: Fixed height and width */}
   <div className="w-32 h-40 mb-6 overflow-hidden rounded-2xl bg-white shadow-sm border border-slate-100 flex items-center justify-center p-2">
-    <img
-      src={module.image}
-      alt={module.title}
-      /* CHANGE: Use object-contain to stop side cutting */
-      className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
-    />
-  </div>
+    {module.image && (
+      <img
+        src={module.image}
+        alt={module.title}
+        className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
+      />
+      )}
+        </div>
+  
 
   <h2 className="text-2xl font-bold text-deep-blue mb-3 leading-tight">
     {module.title}
@@ -79,5 +84,6 @@ export function ModuleSelector() {
         </div>
       </div>
     </div>
+    </>
   )
 }

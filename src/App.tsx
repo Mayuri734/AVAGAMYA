@@ -16,6 +16,12 @@ import { DPOLogin } from './pages/DPOLogin';
 import { ComplianceLogin } from './pages/ComplianceLogin';
 import { AuditorLogin } from './pages/AuditorLogin';
 import { Docs } from './pages/Docs';
+import { EnterpriseAuth } from './pages/EnterpriseAuth';
+import { EnterpriseDashboard } from './pages/EnterpriseDashboard';
+import { SuperAdminLogin } from './pages/SuperAdminLogin';
+import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
+import { CreditCardSimulator } from './pages/CreditCardSimulator';
+import { BankAdminLogin } from './pages/BankAdminLogin';
 
 export default function App() {
   return (
@@ -29,6 +35,7 @@ export default function App() {
             <Route path="how-it-works" element={<HowItWorks />} />
             <Route path="faqs" element={<FAQs />} />
             <Route path="docs" element={<Docs />} />
+            <Route path="CreditCardSimulator" element={<CreditCardSimulator />} />
 
             {/* Analysis Workflow */}
             <Route path="analyze/language" element={<LanguageSelection />} />
@@ -45,7 +52,16 @@ export default function App() {
             <Route path="staff/dpo-dashboard" element={<DPODashboard />} />
             <Route path="staff/auditor-dashboard" element={<AuditorDashboard />} />
             <Route path="staff/compliance-dashboard" element={<ComplianceOfficer />} />
+
+            {/* Enterprise API Gateway Routes */}
+            <Route path="enterprise/auth" element={<EnterpriseAuth />} />
+            <Route path="enterprise/dashboard" element={<EnterpriseDashboard />} />
+            <Route path="enterprise/admin-login" element={<BankAdminLogin />} />
           </Route>
+
+          {/* Super Admin Console: Outside main layout for specialized dark theme */}
+          <Route path="superadmin/login" element={<SuperAdminLogin />} />
+          <Route path="superadmin/dashboard" element={<SuperAdminDashboard />} />
         </Routes>
       </AnalysisProvider>
     </BrowserRouter>
