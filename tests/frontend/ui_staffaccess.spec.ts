@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 
 test('test', async ({ page }) => {
-    await page.goto('https://avagamya.vercel.app/');
+    await page.goto('/');
     await page.getByRole('link', { name: 'Home' }).click();
     await page.getByRole('link', { name: 'Staff Access' }).click();
-    await page.locator('div').filter({ hasText: /^Data Protection Officer$/ }).nth(1).click();
+    await page.getByRole('heading', { name: 'Data Protection Officer' }).click();
     await page.getByRole('textbox', { name: 'DPO Username' }).click();
     await expect(page.locator('form')).toContainText('Verify Access');
     await page.getByRole('textbox', { name: 'DPO Username' }).fill('dpo_admin');
@@ -17,7 +17,7 @@ test('test', async ({ page }) => {
     await page.getByRole('button', { name: 'Logout' }).click();
     await page.getByRole('button', { name: 'Logout & Exit' }).click();
     await page.getByRole('link', { name: 'Staff Access' }).click();
-    await page.locator('div').filter({ hasText: /^External Auditor$/ }).nth(1).click();
+    await page.getByRole('heading', { name: 'External Auditor' }).click();
     await page.getByRole('textbox', { name: 'Auditor Username' }).click();
     await page.getByRole('textbox', { name: 'Auditor Username' }).fill('ext_auditor');
     await page.getByRole('textbox', { name: 'Access Key' }).fill('avagamya@audit');
@@ -30,7 +30,7 @@ test('test', async ({ page }) => {
     await page.getByRole('link', { name: 'AVAGAMYA AVAGAMYA' }).click();
     await page.getByRole('button', { name: 'Logout & Exit' }).click();
     await page.getByRole('link', { name: 'Staff Access' }).click();
-    await page.locator('div').filter({ hasText: 'Compliance Officer' }).nth(5).click();
+    await page.getByRole('heading', { name: 'Compliance Officer' }).click();
     await page.getByRole('textbox', { name: 'Compliance Username' }).click();
     await page.getByRole('textbox', { name: 'Compliance Username' }).fill('comp_officer');
     await page.getByRole('textbox', { name: 'Access Key' }).fill('avagamya@comp');
