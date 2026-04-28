@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 
 test('test', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('link', { name: 'Home' }).click();
-    await page.getByRole('link', { name: 'Staff Access' }).click();
+    // Bypass OTP Auth Flow for UI Testing
+    await page.goto('/staff/modules');
     await page.getByRole('heading', { name: 'Data Protection Officer' }).click();
     await page.getByRole('textbox', { name: 'DPO Username' }).click();
     await expect(page.locator('form')).toContainText('Verify Access');
@@ -16,7 +16,7 @@ test('test', async ({ page }) => {
     await page.getByRole('button', { name: 'Stay Logged In' }).click();
     await page.getByRole('button', { name: 'Logout' }).click();
     await page.getByRole('button', { name: 'Logout & Exit' }).click();
-    await page.getByRole('link', { name: 'Staff Access' }).click();
+    await page.goto('/staff/modules');
     await page.getByRole('heading', { name: 'External Auditor' }).click();
     await page.getByRole('textbox', { name: 'Auditor Username' }).click();
     await page.getByRole('textbox', { name: 'Auditor Username' }).fill('ext_auditor');
@@ -29,7 +29,7 @@ test('test', async ({ page }) => {
     const download = await downloadPromise;
     await page.getByRole('link', { name: 'AVAGAMYA AVAGAMYA' }).click();
     await page.getByRole('button', { name: 'Logout & Exit' }).click();
-    await page.getByRole('link', { name: 'Staff Access' }).click();
+    await page.goto('/staff/modules');
     await page.getByRole('heading', { name: 'Compliance Officer' }).click();
     await page.getByRole('textbox', { name: 'Compliance Username' }).click();
     await page.getByRole('textbox', { name: 'Compliance Username' }).fill('comp_officer');
