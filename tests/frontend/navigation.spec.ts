@@ -10,7 +10,7 @@ test('test', async ({ page }) => {
   await page.getByRole('link', { name: 'Staff Access' }).click();
   await page.getByRole('link', { name: 'AVAGAMYA AVAGAMYA' }).click();
   await page.getByRole('link', { name: 'Staff Access' }).click();
-await page.locator('div').filter({ hasText: 'Data Protection Officer' }).nth(5).click();
+  await page.getByRole('button', { name: 'Data Protection Officer' }).click();
   await page.getByRole('link', { name: 'Staff Access' }).click();
   await page.locator('div').filter({ hasText: 'Compliance Officer' }).nth(5).click();
   await page.getByRole('link', { name: 'Staff Access' }).click();
