@@ -132,30 +132,6 @@ export function Navbar() {
                     </Link>
                   )
                 })}
-
-               
-                {/* Right Action Button for Mobile */}
-                <div className="pt-4 mt-2 border-t border-slate-100">
-                  {isUserLoggedIn ? (
-                    <button
-                      onClick={() => {
-                        setMobileOpen(false)
-                        setShowLogoutConfirm(true)
-                      }}
-                      className="flex w-full items-center justify-center gap-2 px-6 py-3 min-h-[44px] rounded-xl bg-red-50 text-red-600 text-base font-bold box-border transition-all"
-                    >
-                      <LogOut className="w-5 h-5" /> Logout
-                    </button>
-                  ) : (
-                    <Link
-                      to="/staff/modules"
-                      onClick={() => setMobileOpen(false)}
-                      className="flex w-full items-center justify-center gap-2 px-6 py-3 min-h-[44px] rounded-xl bg-deep-blue text-white text-base font-medium transition-all"
-                    >
-                      <Lock className="w-5 h-5" /> Staff Access
-                    </Link>
-                  )}
-                </div>
               </div>
             </motion.div>
           )}
