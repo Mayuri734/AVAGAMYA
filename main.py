@@ -1907,9 +1907,11 @@ async def analyze_compliance_escalate(request: JiraEscalateRequest):
 # Sarvam AI TTS Proxy
 # ---------------------------------------------------------------------------
 
+
 class TTSRequest(BaseModel):
     text: str
     language: str
+
 
 @app.post("/api/tts")
 async def generate_tts(request: TTSRequest):
@@ -1926,14 +1928,14 @@ async def generate_tts(request: TTSRequest):
         "api-subscription-key": api_key,
         "Content-Type": "application/json"
     }
-    
+
     # Standard Sarvam TTS Payload
     payload = {
         "inputs": [request.text],
         "target_language_code": request.language,
         "speaker": "meera",
         "pitch": 0,
-        "pace": 0.9, # Match the slow rate requested earlier
+        "pace": 0.9,  # Match the slow rate requested earlier
         "loudness": 1.5,
         "speech_sample_rate": 8000,
         "enable_preprocessing": True,
@@ -1952,10 +1954,10 @@ async def generate_tts(request: TTSRequest):
                 }
                 headers["Authorization"] = f"Bearer {api_key}"
                 response = await client.post(url, headers=headers, json=fallback_payload)
-            
+
             response.raise_for_status()
             data = response.json()
-            
+
             # Sarvam typically returns {"audios": ["base64..."]}
             if "audios" in data and len(data["audios"]) > 0:
                 return {"audio": data["audios"][0]}
