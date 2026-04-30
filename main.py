@@ -1902,3 +1902,69 @@ async def analyze_compliance_escalate(request: JiraEscalateRequest):
             print(f"Jira escalation persistence failed: {e}")
 
     return {"status": "SUCCESS", "ticket_id": ticket_id}
+
+# ---------------------------------------------------------------------------
+# Sarvam AI TTS Proxy
+# ---------------------------------------------------------------------------
+
+class TTSRequest(BaseModel):
+    text: str
+    language: str
+
+@app.post("/api/tts")
+async def generate_tts(request: TTSRequest):
+    """
+    Proxy endpoint to Sarvam AI TTS API.
+    Returns the base64 audio string.
+    """
+    api_key = os.getenv("SARVAM_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="SARVAM_API_KEY not configured")
+
+    url = "https://api.sarvam.ai/text-to-speech"
+    headers = {
+        "api-subscription-key": api_key,
+        "Content-Type": "application/json"
+    }
+    
+    # Standard Sarvam TTS Payload
+    payload = {
+        "inputs": [request.text],
+        "target_language_code": request.language,
+        "speaker": "meera",
+        "pitch": 0,
+        "pace": 0.9, # Match the slow rate requested earlier
+        "loudness": 1.5,
+        "speech_sample_rate": 8000,
+        "enable_preprocessing": True,
+        "model": "auras-tts"
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            # First try with Sarvam standard payload
+            response = await client.post(url, headers=headers, json=payload)
+            if response.status_code != 200:
+                # Fallback to the generic payload suggested by the user if standard fails
+                fallback_payload = {
+                    "text": request.text,
+                    "language": request.language
+                }
+                headers["Authorization"] = f"Bearer {api_key}"
+                response = await client.post(url, headers=headers, json=fallback_payload)
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            # Sarvam typically returns {"audios": ["base64..."]}
+            if "audios" in data and len(data["audios"]) > 0:
+                return {"audio": data["audios"][0]}
+            elif "audio" in data:
+                return {"audio": data["audio"]}
+            elif "base64" in data:
+                return {"audio": data["base64"]}
+            else:
+                raise HTTPException(status_code=500, detail="No audio returned from TTS API")
+        except Exception as e:
+            print(f"TTS Error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))

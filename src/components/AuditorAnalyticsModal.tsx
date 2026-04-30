@@ -72,7 +72,7 @@ export function AuditorAnalyticsModal({ isOpen, onClose }: AuditorAnalyticsModal
               </div>
               <div>
                 <h2 className="text-2xl font-black text-slate-900 tracking-tight">Enterprise Analytics Dashboard</h2>
-                <p className="text-sm text-slate-500 font-medium">External Auditor Intelligence View</p>
+                <p className="text-sm text-slate-500 font-medium">Internal Auditor Intelligence View</p>
               </div>
             </div>
             <button
@@ -86,7 +86,7 @@ export function AuditorAnalyticsModal({ isOpen, onClose }: AuditorAnalyticsModal
           {/* Charts Area */}
           <div className="flex-1 p-8 overflow-y-auto bg-white">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              
+
               {/* Chart 1: Donut Chart */}
               <div className="bg-slate-50/50 rounded-3xl p-6 border border-slate-100 flex flex-col items-center">
                 <div className="flex items-center gap-2 mb-6 self-start">
@@ -107,7 +107,7 @@ export function AuditorAnalyticsModal({ isOpen, onClose }: AuditorAnalyticsModal
                           <Cell key={`cell-${index}`} fill={entry.color} stroke="none" />
                         ))}
                       </Pie>
-                      <Tooltip 
+                      <Tooltip
                         contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                       />
                       <Legend verticalAlign="bottom" height={36} iconType="circle" />
@@ -127,15 +127,15 @@ export function AuditorAnalyticsModal({ isOpen, onClose }: AuditorAnalyticsModal
                     <BarChart data={violationsData} layout="vertical">
                       <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
                       <XAxis type="number" hide />
-                      <YAxis 
-                        dataKey="name" 
-                        type="category" 
-                        axisLine={false} 
-                        tickLine={false} 
+                      <YAxis
+                        dataKey="name"
+                        type="category"
+                        axisLine={false}
+                        tickLine={false}
                         width={120}
                         style={{ fontSize: '10px', fontWeight: 'bold', fill: '#64748b' }}
                       />
-                      <Tooltip 
+                      <Tooltip
                         cursor={{ fill: '#f1f5f9' }}
                         contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                       />
@@ -161,25 +161,25 @@ export function AuditorAnalyticsModal({ isOpen, onClose }: AuditorAnalyticsModal
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                      <XAxis 
-                        dataKey="day" 
-                        hide 
+                      <XAxis
+                        dataKey="day"
+                        hide
                       />
-                      <YAxis 
-                        axisLine={false} 
+                      <YAxis
+                        axisLine={false}
                         tickLine={false}
                         style={{ fontSize: '10px', fontWeight: 'bold', fill: '#64748b' }}
                       />
-                      <Tooltip 
+                      <Tooltip
                         contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                       />
-                      <Area 
-                        type="monotone" 
-                        dataKey="score" 
-                        stroke="#f97316" 
+                      <Area
+                        type="monotone"
+                        dataKey="score"
+                        stroke="#f97316"
                         strokeWidth={3}
-                        fillOpacity={1} 
-                        fill="url(#colorRisk)" 
+                        fillOpacity={1}
+                        fill="url(#colorRisk)"
                       />
                     </AreaChart>
                   </ResponsiveContainer>
@@ -192,12 +192,12 @@ export function AuditorAnalyticsModal({ isOpen, onClose }: AuditorAnalyticsModal
 
           {/* Footer */}
           <div className="px-8 py-4 border-t border-slate-50 bg-slate-50/30 flex justify-end">
-             <button 
+            <button
               onClick={onClose}
               className="px-6 py-2.5 bg-slate-900 text-white rounded-xl font-bold hover:shadow-lg transition-all"
-             >
-                Close Report
-             </button>
+            >
+              Close Report
+            </button>
           </div>
         </motion.div>
       </div>

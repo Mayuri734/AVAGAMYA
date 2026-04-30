@@ -6,7 +6,7 @@ test('test', async ({ page }) => {
   await page.goto('/staff/modules');
   await page.getByRole('heading', { name: 'Compliance Officer' }).click();
   await page.goto('/staff/modules');
-  await page.getByRole('heading', { name: 'External Auditor' }).click();
+  await page.getByRole('heading', { name: 'Internal Auditor' }).click();
   await page.goto('/staff/modules');
 
 });

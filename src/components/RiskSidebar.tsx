@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { ChevronRight, TrendingUp } from 'lucide-react'
+import { useMemo, useState, useEffect } from 'react'
+import { ChevronRight, TrendingUp, Volume2, Square } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 export interface RiskClause {
@@ -18,6 +18,7 @@ interface RiskSidebarProps {
   onSimulateFinancialImpact?: (clause: RiskClause) => void
   totalScanned: number
   avgRiskScore: number
+  documentLanguage?: string
 }
 
 export function RiskSidebar({
@@ -27,6 +28,7 @@ export function RiskSidebar({
   onSimulateFinancialImpact,
 
   avgRiskScore,
+  documentLanguage,
 }: RiskSidebarProps) {
   // Detect if clause has financial metrics
   // Detect if clause has financial metrics (Supports Arabic and Devanagari numerals)
@@ -163,6 +165,9 @@ export function RiskSidebar({
 
                   {/* Button Group */}
                   <div className="flex gap-1">
+                    {/* TTS Read Aloud Button */}
+                    <TTSButton text={clause.simplified} langCode={documentLanguage} />
+
                     {/* Financial Simulator (if metrics detected) */}
                     {hasFinancialMetric(clause.original_text) && onSimulateFinancialImpact && (
                       <div
@@ -197,6 +202,169 @@ export function RiskSidebar({
       </div>
 
 
+    </div>
+  )
+}
+
+const audioCache = new Map<string, HTMLAudioElement>()
+let currentAudio: HTMLAudioElement | null = null
+
+const TTSButton = ({ text, langCode }: { text: string; langCode?: string }) => {
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+
+  useEffect(() => {
+    return () => {
+      if (isPlaying && currentAudio) {
+        currentAudio.pause()
+        currentAudio.currentTime = 0
+      }
+      window.speechSynthesis.cancel()
+    }
+  }, [isPlaying])
+
+  const fallbackToLocalTTS = (safeText: string, targetLang: string) => {
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(safeText)
+    utterance.lang = targetLang
+
+    const voices = window.speechSynthesis.getVoices()
+    const selectedVoice = voices.find(voice => 
+      targetLang.startsWith('hi') || targetLang.startsWith('mr') 
+        ? (voice.lang.includes('hi') || voice.lang.includes('IN'))
+        : voice.lang.includes(targetLang) || voice.lang.includes('IN')
+    )
+    
+    if (selectedVoice) {
+      utterance.voice = selectedVoice
+    }
+    
+    utterance.rate = 0.9
+    utterance.onend = () => setIsPlaying(false)
+    utterance.onerror = () => setIsPlaying(false)
+
+    setIsPlaying(true)
+    window.speechSynthesis.speak(utterance)
+  }
+
+  const handleTTS = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+
+    if (isPlaying) {
+      if (currentAudio) {
+        currentAudio.pause()
+        currentAudio.currentTime = 0
+      }
+      window.speechSynthesis.cancel()
+      setIsPlaying(false)
+      setIsLoading(false)
+      return
+    }
+
+    // Stop any previously playing audio globally
+    if (currentAudio) {
+      currentAudio.pause()
+      currentAudio.currentTime = 0
+    }
+    window.speechSynthesis.cancel()
+
+    // Clean text before reading
+    const cleanText = text
+      .replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '')
+      .replace(/^(here's|here is|this is|simplified|explanation|simplified version).*?:\s*/i, '')
+      .trim()
+
+    // Text Sanitization (Edge Cases)
+    const safeText = cleanText
+      .replace(/₹/g, ' रुपये ')
+      .replace(/Rs\.?/gi, ' rupees ')
+    
+    // Language Detection & Mapping
+    const isIndic = /[\u0900-\u097F]/.test(safeText)
+    let targetLang = 'en-US'
+
+    if (langCode === 'hi') {
+      targetLang = 'hi-IN'
+    } else if (langCode === 'mr') {
+      targetLang = 'mr-IN'
+    } else if (langCode === 'en') {
+      targetLang = 'en-IN'
+    } else if (isIndic) {
+      targetLang = 'hi-IN'
+    }
+
+    const cacheKey = `${targetLang}_${safeText}`
+
+    // Check Cache
+    if (audioCache.has(cacheKey)) {
+      const audio = audioCache.get(cacheKey)!
+      currentAudio = audio
+      audio.onended = () => setIsPlaying(false)
+      audio.onerror = () => {
+        setIsPlaying(false)
+        fallbackToLocalTTS(safeText, targetLang)
+      }
+      setIsPlaying(true)
+      audio.play().catch(() => fallbackToLocalTTS(safeText, targetLang))
+      return
+    }
+
+    // Fetch from Backend API
+    try {
+      setIsLoading(true)
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+      const response = await fetch(`${baseUrl}/api/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: safeText, language: targetLang })
+      })
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      if (!data.audio) {
+        throw new Error('No audio returned')
+      }
+
+      const audioSrc = `data:audio/wav;base64,${data.audio}`
+      const audio = new Audio(audioSrc)
+      audioCache.set(cacheKey, audio)
+      currentAudio = audio
+
+      audio.onended = () => setIsPlaying(false)
+      audio.onerror = () => {
+        setIsPlaying(false)
+        fallbackToLocalTTS(safeText, targetLang)
+      }
+
+      setIsLoading(false)
+      setIsPlaying(true)
+      audio.play().catch(() => fallbackToLocalTTS(safeText, targetLang))
+
+    } catch (error) {
+      console.error("Sarvam API TTS failed, falling back to local TTS:", error)
+      setIsLoading(false)
+      fallbackToLocalTTS(safeText, targetLang)
+    }
+  }
+
+  return (
+    <div
+      onClick={handleTTS}
+      className={`p-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-center ${
+        isPlaying 
+          ? 'bg-orange-100 text-orange-600 hover:bg-orange-200' 
+          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+      } ${isLoading ? 'opacity-70' : ''}`}
+      title={isPlaying ? "Stop Reading" : "Read Aloud"}
+    >
+      {isPlaying ? (
+        <Square className="w-4 h-4 fill-current" />
+      ) : (
+        <Volume2 className={`w-4 h-4 ${isLoading ? 'animate-pulse text-blue-500' : ''}`} />
+      )}
     </div>
   )
 }

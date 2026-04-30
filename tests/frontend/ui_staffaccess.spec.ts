@@ -17,7 +17,7 @@ test('test', async ({ page }) => {
     await page.getByRole('button', { name: 'Logout' }).click();
     await page.getByRole('button', { name: 'Logout & Exit' }).click();
     await page.goto('/staff/modules');
-    await page.getByRole('heading', { name: 'External Auditor' }).click();
+    await page.getByRole('heading', { name: 'Internal Auditor' }).click();
     await page.getByRole('textbox', { name: 'Auditor Username' }).click();
     await page.getByRole('textbox', { name: 'Auditor Username' }).fill('ext_auditor');
     await page.getByRole('textbox', { name: 'Access Key' }).fill('avagamya@audit');

@@ -22,7 +22,7 @@ export function ModuleSelector() {
     },
     {
       id: 'auditor',
-      title: 'External Auditor',
+      title: 'Internal Auditor',
       image: '/audit.png',
       color: 'bg-purple-50 border-purple-200 hover:bg-purple-100',
       onClick: () => navigate('/staff/auditor/login'),
