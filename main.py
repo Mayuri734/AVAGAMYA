@@ -1975,6 +1975,7 @@ async def generate_tts(request: TTSRequest):
 # Telemetry Endpoint for DPODashboard
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/v1/system/telemetry")
 async def get_system_telemetry():
     """
@@ -1983,7 +1984,7 @@ async def get_system_telemetry():
     """
     import os
     residency = os.getenv("RESIDENCY_REGION", "ap-south-1 (Mumbai)")
-    
+
     return {
         "status": "active",
         "residency_region": residency,
