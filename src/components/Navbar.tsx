@@ -38,7 +38,16 @@ export function Navbar() {
   const confirmLogoutAndNavigate = () => {
     localStorage.removeItem('avagamya_session') // Clear the flag
     setShowLogoutConfirm(false)
-    navigate(pendingPath || '/')
+    
+    // Default fallback based on current dashboard context
+    let defaultPath = '/'
+    if (location.pathname.includes('/staff/')) {
+      defaultPath = '/staff/modules'
+    } else if (location.pathname.includes('/enterprise/')) {
+      defaultPath = '/enterprise/auth'
+    }
+
+    navigate(pendingPath || defaultPath)
   }
 
   return (
