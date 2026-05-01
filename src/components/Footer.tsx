@@ -10,9 +10,12 @@ export function Footer() {
         
         <ShieldCheck className="w-4 h-4" />
 
-        Bank-Grade Security & Compliance Ready 
+        Bank-Grade Security & Compliance Ready,delivering trusted protection for modern digital finance.
+       
+       ⭐ Secure. Compliant. Trusted.
 
       </div>
+      
     </div>
 
   </div>
