@@ -35,8 +35,8 @@ test('test', async ({ page }) => {
     await page.getByRole('textbox', { name: 'Compliance Username' }).fill('comp_officer');
     await page.getByRole('textbox', { name: 'Access Key' }).fill('avagamya@comp');
     await page.getByRole('button', { name: 'Verify Access' }).click();
-    await page.getByRole('button', { name: 'Sandbox' }).click();
-    await page.getByRole('button', { name: 'Audit' }).click();
-    await page.getByRole('button', { name: 'Choose File' }).click();
-    await page.getByText('Compliance Officer Audit').click();
+    await page.getByRole('button', { name: 'Verify Access' }).click();
+    await expect(page.getByRole('heading', { name: 'Compliance Command Center' })).toBeVisible();
+    await expect(page.getByText('Policy Intelligence')).toBeVisible();
+    await expect(page.getByText('Governance Sandbox')).toBeVisible();
 });
