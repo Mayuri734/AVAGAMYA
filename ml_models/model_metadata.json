@@ -1,0 +1,48 @@
+{
+  "model_type": "RandomForestClassifier",
+  "n_features": 11,
+  "feature_names": [
+    "jargon_count",
+    "word_count",
+    "avg_word_length",
+    "flesch_score",
+    "has_currency",
+    "has_percentage",
+    "has_devanagari",
+    "has_regional_risk",
+    "sentence_length_z",
+    "unique_word_ratio",
+    "exclamation_count"
+  ],
+  "label_classes": [
+    "HIGH",
+    "LOW",
+    "MEDIUM"
+  ],
+  "metrics": {
+    "rf_accuracy": 0.9333,
+    "lr_accuracy": 0.9333,
+    "cv_mean": 0.9467,
+    "cv_std": 0.0653,
+    "train_size": 59,
+    "test_size": 15,
+    "label_distribution": {
+      "MEDIUM": 35,
+      "HIGH": 20,
+      "LOW": 19
+    },
+    "feature_importances": {
+      "jargon_count": 0.0988761453806173,
+      "word_count": 0.195111398469977,
+      "avg_word_length": 0.22661477176287853,
+      "flesch_score": 0.047739670382545,
+      "has_currency": 0.021345710676031172,
+      "has_percentage": 0.09036986063850165,
+      "has_devanagari": 0.028321644709805742,
+      "has_regional_risk": 0.05259957381139918,
+      "sentence_length_z": 0.20346027610474182,
+      "unique_word_ratio": 0.03556094806350273,
+      "exclamation_count": 0.0
+    }
+  }
+}

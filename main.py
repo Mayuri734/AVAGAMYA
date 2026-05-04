@@ -10,6 +10,15 @@ import unicodedata
 import gc
 import httpx
 
+# ── ML / Data-Science layer (Feature 1 & 2) ─────────────────────────────────
+import pandas as pd
+import numpy as np
+try:
+    from ml_models.risk_classifier import load_models, predict_risk
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
+
 from datetime import datetime
 from typing import Optional, Set, Tuple, List, Dict
 from contextlib import asynccontextmanager
@@ -89,15 +98,28 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
 # ---------------------------------------------------------------------------
 
 
+# ── ML model globals (loaded once at startup) ────────────────────────────────
+ML_RF_MODEL    = None
+ML_LE          = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Handle application lifespan events.
-    Replaces deprecated @app.on_event('startup') logic.
+    Loads the Sklearn Random Forest model at startup if available.
     """
-    # Startup: Perform any initialization here if needed
+    global ML_RF_MODEL, ML_LE
+    if ML_AVAILABLE:
+        ML_RF_MODEL, ML_LE = load_models()
+        if ML_RF_MODEL is not None:
+            print("✅ ML Risk Classifier loaded (Random Forest)")
+        else:
+            print("⚠️  ML model not found — run notebooks/AVAGAMYA_EDA.ipynb to train first")
     yield
-    # Shutdown: Perform any cleanup here if needed
+    # Shutdown: cleanup
+    ML_RF_MODEL = None
+    ML_LE       = None
 
 
 app = FastAPI(
@@ -1982,12 +2004,360 @@ async def get_system_telemetry():
     Returns live system telemetry for the DPO Dashboard.
     Ensures data residency and zero-retention (ephemeral) processing validation.
     """
-    import os
     residency = os.getenv("RESIDENCY_REGION", "ap-south-1 (Mumbai)")
-
     return {
         "status": "active",
         "residency_region": residency,
         "retention_policy": "Zero-Retention (Ephemeral)",
-        "pii_bytes_retained": 0
+        "pii_bytes_retained": 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Feature 1 — ML Risk Classifier  (POST /analyze/ml-risk)
+# ---------------------------------------------------------------------------
+
+class MLRiskRequest(BaseModel):
+    clause: str
+    compare_symbolic: bool = True   # also run the rule-based engine for A/B
+
+
+class MLRiskResponse(BaseModel):
+    clause: str
+    ml_risk_level:   str
+    ml_confidence:   float
+    ml_probabilities: Dict
+    ml_features:     Dict
+    symbolic_risk_level: Optional[str] = None   # from deterministic engine
+    symbolic_score:      Optional[float] = None
+    model_status:        str   # "READY" | "NOT_TRAINED"
+
+
+@app.post("/analyze/ml-risk", response_model=MLRiskResponse)
+async def analyze_ml_risk(request: MLRiskRequest) -> MLRiskResponse:
+    """
+    Feature 1 — ML-powered risk prediction using a trained Random Forest.
+
+    Runs the Sklearn model (11 engineered features) and optionally compares
+    against the deterministic symbolic engine so the two can be A/B tested.
+
+    JD: Design/deploy ML models · Scikit-learn · Model evaluation.
+    """
+    clause = (request.clause or "").strip()
+    if not clause:
+        raise HTTPException(status_code=400, detail="clause must not be empty")
+
+    model_status = "READY" if (ML_RF_MODEL is not None) else "NOT_TRAINED"
+
+    # ── ML Prediction ────────────────────────────────────────────────────────
+    if ML_AVAILABLE and ML_RF_MODEL is not None:
+        pred = predict_risk(clause, ML_RF_MODEL, ML_LE)
+    else:
+        pred = {
+            "risk_level":    "UNKNOWN",
+            "confidence":    0.0,
+            "probabilities": {},
+            "features":      {},
+            "error":         "Model not trained. Run AVAGAMYA_EDA.ipynb first.",
+        }
+
+    # ── Symbolic (Deterministic) A/B Comparison ───────────────────────────────
+    sym_level, sym_score = None, None
+    if request.compare_symbolic:
+        sym_score, _ = MathematicalRiskEngine.calculate_risk_score(clause)
+        if sym_score <= 40:
+            sym_level = "LOW"
+        elif sym_score <= 70:
+            sym_level = "MEDIUM"
+        else:
+            sym_level = "HIGH"
+
+    return MLRiskResponse(
+        clause=clause,
+        ml_risk_level=pred["risk_level"],
+        ml_confidence=pred["confidence"],
+        ml_probabilities=pred["probabilities"],
+        ml_features=pred["features"],
+        symbolic_risk_level=sym_level,
+        symbolic_score=sym_score,
+        model_status=model_status,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Feature 2 — Analytics Dashboard  (GET /analytics/document-stats)
+# ---------------------------------------------------------------------------
+
+@app.get("/analytics/document-stats")
+async def get_document_analytics():
+    """
+    Feature 2 — Pandas-powered compliance analytics.
+
+    Pulls the full compliance_logs table into a Pandas DataFrame, cleans it,
+    and computes aggregated stats for the React analytics dashboard.
+
+    JD: Data analysis/visualisation · Pandas · NumPy · SQL/Supabase.
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+
+    try:
+        rows = supabase.table("compliance_logs").select("*").execute().data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supabase read failed: {e}")
+
+    if not rows:
+        return {
+            "total_documents": 0,
+            "message": "No compliance data yet. Upload some PDFs first.",
+        }
+
+    # ── Load into Pandas ──────────────────────────────────────────────────────
+    df = pd.DataFrame(rows)
+
+    # ── Data Cleaning ─────────────────────────────────────────────────────────
+    df["timestamp"]       = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["processing_time"] = pd.to_numeric(df["processing_time"], errors="coerce")
+
+    # Parse numeric risk score (stored as string like "3 High Risk Clauses")
+    df["risk_count"] = (
+        df["risk_score"]
+        .astype(str)
+        .str.extract(r"(\d+)")
+        .astype(float)
+        .fillna(0)
+    )
+
+    # Drop rows with no timestamp (data quality)
+    df = df.dropna(subset=["timestamp"])
+    df = df.drop_duplicates(subset=["unique_hash"], keep="last")
+
+    # ── Feature Engineering ───────────────────────────────────────────────────
+    df["date"]     = df["timestamp"].dt.date.astype(str)
+    df["hour"]     = df["timestamp"].dt.hour
+    df["is_blocked"] = (df["status"] == "BLOCKED").astype(int)
+
+    # ── Aggregations (NumPy + Pandas) ─────────────────────────────────────────
+    total_docs     = int(len(df))
+    blocked_count  = int(df["is_blocked"].sum())
+    clean_count    = total_docs - blocked_count
+    compliance_pct = round(clean_count / total_docs * 100, 2) if total_docs else 0.0
+
+    avg_proc_time   = round(float(df["processing_time"].mean()), 3) if not df["processing_time"].isna().all() else 0.0
+    p95_proc_time   = round(float(np.percentile(df["processing_time"].dropna(), 95)), 3) if len(df) else 0.0
+    avg_risk_count  = round(float(df["risk_count"].mean()), 2)
+    max_risk_count  = int(df["risk_count"].max())
+
+    # Status breakdown
+    status_dist = df["status"].value_counts().to_dict()
+
+    # Language breakdown
+    lang_dist = df["language_detected"].value_counts().to_dict()
+
+    # Daily upload trend (last 30 days)
+    daily_trend = (
+        df.groupby("date")["unique_hash"]
+        .count()
+        .tail(30)
+        .reset_index()
+        .rename(columns={"unique_hash": "uploads"})
+        .to_dict(orient="records")
+    )
+
+    # Peak hour analysis
+    peak_hour = int(df["hour"].mode()[0]) if not df["hour"].empty else 0
+
+    # Top risk documents (highest clause count)
+    top_risk_docs = (
+        df.nlargest(5, "risk_count")[["filename", "risk_count", "timestamp", "language_detected"]]
+        .assign(timestamp=lambda d: d["timestamp"].astype(str))
+        .to_dict(orient="records")
+    )
+
+    return {
+        "total_documents":      total_docs,
+        "clean_count":          clean_count,
+        "blocked_count":        blocked_count,
+        "compliance_percentage": compliance_pct,
+        "processing_time_stats": {
+            "avg_seconds":  avg_proc_time,
+            "p95_seconds":  p95_proc_time,
+        },
+        "risk_stats": {
+            "avg_high_risk_clauses": avg_risk_count,
+            "max_high_risk_clauses": max_risk_count,
+        },
+        "status_distribution":   status_dist,
+        "language_distribution": lang_dist,
+        "daily_upload_trend":    daily_trend,
+        "peak_upload_hour":      peak_hour,
+        "top_risk_documents":    top_risk_docs,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Feature 4 — TF-IDF Jargon Relevance Scorer  (POST /analyze/tfidf-score)
+# ---------------------------------------------------------------------------
+
+class TFIDFRequest(BaseModel):
+    clauses: List[str]   # List of clause strings from the uploaded document
+
+
+@app.post("/analyze/tfidf-score")
+async def analyze_tfidf_score(request: TFIDFRequest):
+    """
+    Feature 4 — TF-IDF contextual jargon relevance scoring.
+
+    Instead of binary jargon detection (present/absent), this endpoint
+    computes TF-IDF scores so high-frequency jargon in a short doc is
+    weighted more heavily than a single mention in a 50-page policy.
+
+    JD: NLP · Scikit-learn · Feature engineering.
+    """
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+    except ImportError:
+        raise HTTPException(status_code=500, detail="scikit-learn not installed")
+
+    clauses = [c.strip() for c in request.clauses if c.strip()]
+    if not clauses:
+        raise HTTPException(status_code=400, detail="clauses list must not be empty")
+
+    # Jargon vocabulary (mirrors JARGON_DATABASE in compliance_engine.py)
+    JARGON_VOCAB = [
+        "penalty", "forfeit", "forfeiture", "levy", "late fee", "surcharge",
+        "not liable", "no liability", "unlimited liability", "exclusive remedy",
+        "indemnify", "indemnification", "hold harmless", "disclaimer",
+        "sole discretion", "absolute discretion", "at its discretion",
+        "reserve the right", "may refuse", "without notice", "revoke",
+        "arbitration", "jurisdiction", "governing law", "breach", "default",
+        "binding", "waiver",
+    ]
+
+    # Fit TF-IDF restricted to jargon vocabulary
+    vectorizer = TfidfVectorizer(
+        vocabulary=JARGON_VOCAB,
+        ngram_range=(1, 3),
+        lowercase=True,
+        sublinear_tf=True,   # log(1+tf) dampening for long docs
+    )
+    tfidf_matrix = vectorizer.fit_transform(clauses)  # shape: (n_clauses, n_vocab)
+    feature_names = vectorizer.get_feature_names_out().tolist()
+
+    # Build per-clause results
+    results = []
+    for i, clause in enumerate(clauses):
+        row = tfidf_matrix[i].toarray()[0]
+        # Top jargon terms with non-zero TF-IDF score
+        hits = [
+            {"term": feature_names[j], "tfidf_score": round(float(row[j]), 4)}
+            for j in row.argsort()[::-1]
+            if row[j] > 0
+        ][:5]   # top 5 per clause
+
+        clause_tfidf_sum = float(round(row.sum(), 4))
+        results.append({
+            "clause_index":  i,
+            "clause_preview": clause[:80] + ("..." if len(clause) > 80 else ""),
+            "tfidf_jargon_weight": clause_tfidf_sum,
+            "top_jargon_terms":   hits,
+        })
+
+    # Document-level: which jargon terms dominate the whole doc
+    doc_scores = np.asarray(tfidf_matrix.sum(axis=0)).flatten()
+    top_doc_jargon = [
+        {"term": feature_names[j], "doc_tfidf": round(float(doc_scores[j]), 4)}
+        for j in doc_scores.argsort()[::-1]
+        if doc_scores[j] > 0
+    ][:10]
+
+    return {
+        "total_clauses":    len(clauses),
+        "top_document_jargon": top_doc_jargon,
+        "clause_scores":    results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Feature 6 — Compliance Dataset Export  (GET /export/compliance-dataset)
+# ---------------------------------------------------------------------------
+
+@app.get("/export/compliance-dataset")
+async def export_compliance_dataset(fmt: str = Query("json", description="'json' or 'csv'")):
+    """
+    Feature 6 — Pandas-powered compliance audit dataset export.
+
+    Joins compliance_logs + document_cache, cleans the data, engineers
+    derived features, and returns a model-ready dataset as JSON or CSV.
+
+    JD: Large dataset preprocessing · Pandas · NumPy · Feature engineering.
+    """
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+
+    # ── Pull both tables ────────────────────────────────────────────────────
+    try:
+        logs  = supabase.table("compliance_logs").select("*").execute().data
+        cache = supabase.table("document_cache").select("file_hash,confusion_index").execute().data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supabase read failed: {e}")
+
+    if not logs:
+        raise HTTPException(status_code=404, detail="No compliance data found")
+
+    df_logs  = pd.DataFrame(logs)
+    df_cache = pd.DataFrame(cache) if cache else pd.DataFrame(columns=["file_hash", "confusion_index"])
+
+    # ── Join ─────────────────────────────────────────────────────────────
+    df = pd.merge(df_logs, df_cache, left_on="unique_hash", right_on="file_hash", how="left")
+
+    # ── Data Cleaning ─────────────────────────────────────────────────────────
+    df["timestamp"]       = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["processing_time"] = pd.to_numeric(df["processing_time"], errors="coerce")
+    df["confusion_index"] = pd.to_numeric(df["confusion_index"], errors="coerce")
+    df["risk_count"] = (
+        df["risk_score"].astype(str).str.extract(r"(\d+)").astype(float).fillna(0)
+    )
+    df = df.drop_duplicates(subset="unique_hash", keep="last")
+    df = df.dropna(subset=["timestamp"])
+
+    # ── Feature Engineering ───────────────────────────────────────────────────
+    df["is_blocked"]     = (df["status"] == "BLOCKED").astype(int)
+    df["is_regional"]    = df["language_detected"].isin(["hi", "mr"]).astype(int)
+    df["hour_of_day"]    = df["timestamp"].dt.hour
+    df["day_of_week"]    = df["timestamp"].dt.day_name()
+    df["processing_speed"] = np.where(
+        df["processing_time"] > 0,
+        (df["risk_count"] / df["processing_time"]).round(3),
+        0.0,
+    )
+
+    # Select export columns
+    export_cols = [
+        "filename", "timestamp", "status", "language_detected",
+        "processing_time", "risk_count", "confusion_index",
+        "is_blocked", "is_regional", "hour_of_day", "day_of_week",
+        "processing_speed", "unique_hash",
+    ]
+    export_cols = [c for c in export_cols if c in df.columns]
+    df_export = df[export_cols].copy()
+    df_export["timestamp"] = df_export["timestamp"].astype(str)
+
+    if fmt.lower() == "csv":
+        from fastapi.responses import StreamingResponse
+        import io
+        csv_buffer = io.StringIO()
+        df_export.to_csv(csv_buffer, index=False)
+        csv_buffer.seek(0)
+        return StreamingResponse(
+            iter([csv_buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=avagamya_compliance_dataset.csv"},
+        )
+
+    return {
+        "total_records":     int(len(df_export)),
+        "columns":           export_cols,
+        "feature_engineered": ["is_blocked", "is_regional", "hour_of_day", "day_of_week", "processing_speed"],
+        "dataset":           df_export.fillna(0).to_dict(orient="records"),
     }

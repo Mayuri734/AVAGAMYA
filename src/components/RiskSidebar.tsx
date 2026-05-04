@@ -1,6 +1,198 @@
-import { useMemo, useState, useEffect } from 'react'
-import { ChevronRight, TrendingUp, Volume2, Square } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { useMemo, useState, useEffect, useCallback } from 'react'
+import { ChevronRight, TrendingUp, Volume2, Square, Brain, ChevronDown, ChevronUp } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+
+// ── ML types ──────────────────────────────────────────────────────────────────
+interface MLFeatures {
+  jargon_count: number
+  word_count: number
+  avg_word_length: number
+  flesch_score: number
+  has_currency: number
+  has_percentage: number
+  has_devanagari: number
+  has_regional_risk: number
+  sentence_length_z: number
+  unique_word_ratio: number
+}
+
+interface MLInsightData {
+  ml_risk_level: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN'
+  ml_confidence: number
+  ml_probabilities: Record<string, number>
+  ml_features: MLFeatures
+  symbolic_risk_level: string | null
+  symbolic_score: number | null
+  model_status: string
+}
+
+// ── Human-readable reason generator ──────────────────────────────────────────
+// ── Consumer-friendly verdict ─────────────────────────────────────────────────
+function getVerdict(riskLevel: string): { headline: string; subtext: string; bg: string; border: string; dot: string } {
+  if (riskLevel === 'HIGH') return {
+    headline: 'This clause needs your attention',
+    subtext: 'Our AI found this clause could significantly affect your rights or money.',
+    bg: 'bg-red-50', border: 'border-red-200', dot: 'bg-red-500',
+  }
+  if (riskLevel === 'MEDIUM') return {
+    headline: 'Read this clause carefully',
+    subtext: 'Our AI found this clause has some terms that may not be obvious at first glance.',
+    bg: 'bg-amber-50', border: 'border-amber-200', dot: 'bg-amber-400',
+  }
+  return {
+    headline: 'This clause looks routine',
+    subtext: 'Our AI found this clause uses straightforward language with low risk to you.',
+    bg: 'bg-green-50', border: 'border-green-200', dot: 'bg-green-500',
+  }
+}
+
+// ── Plain-language reasons (what it means FOR the consumer) ───────────────────
+function buildConsumerReasons(features: MLFeatures, riskLevel: string): Array<{ icon: string; text: string }> {
+  const reasons: Array<{ icon: string; text: string }> = []
+
+  if (features.jargon_count >= 3)
+    reasons.push({ icon: '⚠️', text: 'Uses several legal terms that banks use to limit your rights — worth reading twice.' })
+  else if (features.jargon_count >= 1)
+    reasons.push({ icon: '📋', text: 'Contains legal terms that could quietly affect your rights or account.' })
+
+  if (features.flesch_score < 30)
+    reasons.push({ icon: '🔍', text: 'Written in very complex language — intentionally hard to understand for a regular person.' })
+  else if (features.flesch_score < 50)
+    reasons.push({ icon: '🔍', text: 'Written in dense language — take a moment to re-read this one.' })
+
+  if (features.has_currency)
+    reasons.push({ icon: '💸', text: 'Involves a specific amount of money that could be charged to you.' })
+
+  if (features.has_percentage)
+    reasons.push({ icon: '📈', text: 'Mentions a percentage — this could affect interest rates or charges on your account.' })
+
+  if (features.has_devanagari && features.has_regional_risk)
+    reasons.push({ icon: '🌐', text: 'Regional language clause with risk terms — make sure you fully understand what you\'re agreeing to.' })
+
+  if (features.sentence_length_z > 1)
+    reasons.push({ icon: '📜', text: 'This is an unusually long clause — it may bundle multiple conditions together that are easy to miss.' })
+
+  if (features.avg_word_length > 6)
+    reasons.push({ icon: '🔤', text: 'Uses very technical or legal vocabulary — you may want to ask someone to explain this.' })
+
+  if (reasons.length === 0) {
+    if (riskLevel === 'LOW')
+      reasons.push({ icon: '✅', text: 'Standard clause with no unusual terms or hidden charges detected.' })
+    else
+      reasons.push({ icon: '🤖', text: 'Our AI detected a moderate risk pattern in how this clause is worded.' })
+  }
+
+  return reasons
+}
+
+// ── What should the user do? ──────────────────────────────────────────────────
+function getActionTip(riskLevel: string): string {
+  if (riskLevel === 'HIGH') return '👉 Ask your bank to explain this clause before signing.'
+  if (riskLevel === 'MEDIUM') return '👉 Re-read this clause and check if any conditions apply to your situation.'
+  return '👉 No action needed — this clause is standard.'
+}
+
+// ── ML Insight Panel (Consumer-Friendly) ─────────────────────────────────────
+const MLInsightPanel = ({ clauseText }: { clauseText: string }) => {
+  const [data, setData] = useState<MLInsightData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [fetched, setFetched] = useState(false)
+
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+  const fetchInsight = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (fetched) { setExpanded(p => !p); return }
+    setLoading(true)
+    setExpanded(true)
+    try {
+      const res = await fetch(`${baseUrl}/analyze/ml-risk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clause: clauseText, compare_symbolic: true }),
+      })
+      const json: MLInsightData = await res.json()
+      setData(json)
+      setFetched(true)
+    } catch {
+      setData(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [clauseText, fetched, baseUrl])
+
+  return (
+    <div className="mt-2">
+      {/* Trigger button */}
+      <button
+        onClick={fetchInsight}
+        className="flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2.5 py-1.5 rounded-lg transition-colors w-full justify-between"
+      >
+        <span className="flex items-center gap-1.5">
+          <Brain className="w-3.5 h-3.5" />
+          {loading ? 'AI is checking this clause...' : 'What does AI think?'}
+        </span>
+        {loading
+          ? <span className="w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+          : expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />
+        }
+      </button>
+
+      {/* Expanded panel */}
+      <AnimatePresence>
+        {expanded && data && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.22 }}
+            className="overflow-hidden"
+          >
+            <div className="mt-2 rounded-xl border border-purple-100 bg-white shadow-sm overflow-hidden">
+
+              {/* Verdict header */}
+              {(() => {
+                const v = getVerdict(data.ml_risk_level)
+                return (
+                  <div className={`${v.bg} ${v.border} border-b px-3 py-2.5 flex items-start gap-2.5`}>
+                    <span className={`mt-0.5 w-2.5 h-2.5 rounded-full flex-shrink-0 ${v.dot}`} />
+                    <div>
+                      <p className="text-sm font-bold text-gray-800">{v.headline}</p>
+                      <p className="text-xs text-gray-600 mt-0.5 leading-snug">{v.subtext}</p>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Reasons */}
+              <div className="px-3 py-2.5 space-y-1.5">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Why you should know this</p>
+                {buildConsumerReasons(data.ml_features, data.ml_risk_level).map((r, i) => (
+                  <div key={i} className="flex items-start gap-2 bg-gray-50 rounded-lg px-2.5 py-2 border border-gray-100">
+                    <span className="text-sm leading-none mt-px flex-shrink-0">{r.icon}</span>
+                    <p className="text-xs text-gray-700 leading-snug">{r.text}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Action tip */}
+              <div className="px-3 pb-3">
+                <div className="bg-purple-50 border border-purple-100 rounded-lg px-3 py-2">
+                  <p className="text-xs text-purple-800 font-medium leading-snug">
+                    {getActionTip(data.ml_risk_level)}
+                  </p>
+                </div>
+              </div>
+
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 
 export interface RiskClause {
   id: number
@@ -145,6 +337,9 @@ export function RiskSidebar({
                       .trim()}
                   </p>
                 </div>
+
+                {/* ML Insight Panel */}
+                <MLInsightPanel clauseText={clause.original_text} />
 
                 {/* Footer: Score + Buttons */}
                 <div className="flex items-center justify-between gap-2">
