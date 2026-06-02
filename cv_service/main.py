@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import fitz
 import joblib
 import numpy as np
-import io
 import os
 from classifier import extract_page_features
 
@@ -24,6 +23,7 @@ if os.path.exists(MODEL_PATH):
 else:
     clf = None
 
+
 @app.post("/classify-page")
 async def classify_page(file: UploadFile = File(...)):
     """
@@ -31,20 +31,20 @@ async def classify_page(file: UploadFile = File(...)):
     """
     if not clf:
         raise HTTPException(status_code=500, detail="Model not loaded")
-    
+
     try:
         contents = await file.read()
         doc = fitz.open(stream=contents, filetype="pdf")
         if len(doc) == 0:
             raise HTTPException(status_code=400, detail="Empty PDF")
-            
+
         page = doc[0]
         features = extract_page_features(page)
-        
+
         prediction = clf.predict([features])[0]
         probabilities = clf.predict_proba([features])[0]
         confidence = float(np.max(probabilities))
-        
+
         return {
             "page_type": prediction,
             "confidence": confidence,
@@ -54,9 +54,11 @@ async def classify_page(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/health")
 def health():
     return {"status": "ok", "model_loaded": clf is not None}
+
 
 if __name__ == "__main__":
     import uvicorn

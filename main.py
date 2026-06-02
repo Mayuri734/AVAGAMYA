@@ -102,8 +102,8 @@ CV_TABLE_BOOST = 15.0  # Points added to risk score for clauses in tables
 
 
 # ── ML model globals (loaded once at startup) ────────────────────────────────
-ML_RF_MODEL    = None
-ML_LE          = None
+ML_RF_MODEL = None
+ML_LE = None
 
 
 @asynccontextmanager
@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown: cleanup
     ML_RF_MODEL = None
-    ML_LE       = None
+    ML_LE = None
 
 
 app = FastAPI(
@@ -306,7 +306,7 @@ class PiiScanResponse(BaseModel):
 class ClauseAnalysis(BaseModel):
     id: int
     page: int
-    page_type: Optional[str] = "TEXT" # New
+    page_type: Optional[str] = "TEXT"  # New
     original_text: str
     risk_level: str  # "LOW" | "MEDIUM" | "HIGH"
     confusion_score: float
@@ -319,7 +319,7 @@ class HighRiskClauseAnalysis(BaseModel):
 
     id: int
     page: int
-    page_type: Optional[str] = "TEXT" # New
+    page_type: Optional[str] = "TEXT"  # New
     original_text: str
     simplified: str  # Gemini-generated simple explanation
     risk_score: float  # Confusion score
@@ -416,7 +416,7 @@ def _find_anchor_sequence(pdf_words: List[list], expected_words: List[str]) -> L
     return []
 
 
-def extract_coordinates_from_pdf(
+def extract_coordinates_from_pdf(  # noqa: C901
     pdf_bytes: bytes,
     page_num: int,
     clause_text: str,
@@ -433,7 +433,7 @@ def extract_coordinates_from_pdf(
         if page_num < 1 or page_num > len(doc):
             return None
         page = doc[page_num - 1]
-        
+
         # 1. Normalize and split input text into words
         clean_target = _normalize_text_for_matching(clause_text)
         target_words = [w for w in clean_target.split() if len(w) > 1]
@@ -441,14 +441,14 @@ def extract_coordinates_from_pdf(
             return None
 
         # 2. Get all words from PDF page with their rects
-        pdf_words = page.get_text("words") # (x0, y0, x1, y1, "word", block_no, line_no, word_no)
-        
+        pdf_words = page.get_text("words")  # (x0, y0, x1, y1, "word", block_no, line_no, word_no)
+
         # 3. Sliding window search for the word sequence
         # We allow a small gap (max 3 words) to handle inserted page numbers or noise
         best_match_rects = []
         max_words = len(pdf_words)
         target_len = len(target_words)
-        
+
         for i in range(max_words):
             current_pdf_word = _clean_word_for_matching(pdf_words[i][4])
             if current_pdf_word == target_words[0]:
@@ -456,13 +456,13 @@ def extract_coordinates_from_pdf(
                 matched_rects = [fitz.Rect(pdf_words[i][:4])]
                 target_idx = 1
                 pdf_idx = i + 1
-                
+
                 while target_idx < target_len and pdf_idx < max_words:
                     pdf_w = _clean_word_for_matching(pdf_words[pdf_idx][4])
                     if pdf_w == target_words[target_idx]:
                         matched_rects.append(fitz.Rect(pdf_words[pdf_idx][:4]))
                         target_idx += 1
-                    elif len(pdf_w) < 2: # Skip noise/punctuation
+                    elif len(pdf_w) < 2:  # Skip noise/punctuation
                         pass
                     else:
                         # Allow skipping up to 2 words in PDF (page numbers, etc)
@@ -479,8 +479,8 @@ def extract_coordinates_from_pdf(
                         if not found:
                             break
                     pdf_idx += 1
-                
-                if target_idx >= target_len * 0.8: # 80% match threshold for fuzzy recovery
+
+                if target_idx >= target_len * 0.8:  # 80% match threshold for fuzzy recovery
                     best_match_rects = matched_rects
                     break
 
@@ -490,7 +490,7 @@ def extract_coordinates_from_pdf(
         # 4. Group rects into lines for cleaner UI highlights
         lines_dict = {}
         for r in best_match_rects:
-            y_key = round(r.y0 / 4) * 4 # Group by Y coordinate with small tolerance
+            y_key = round(r.y0 / 4) * 4  # Group by Y coordinate with small tolerance
             lines_dict.setdefault(y_key, []).append(r)
 
         highlights = []
@@ -499,8 +499,8 @@ def extract_coordinates_from_pdf(
             y0 = min(r.y0 for r in line)
             x1 = max(r.x1 for r in line)
             y1 = max(r.y1 for r in line)
-            highlights.append([int(page_num), int(x0), int(y0), int(x1-x0), int(y1-y0) + 2])
-            
+            highlights.append([int(page_num), int(x0), int(y0), int(x1 - x0), int(y1 - y0) + 2])
+
         return highlights
     except Exception as e:
         print(f"Highlighting Error: {e}")
@@ -666,7 +666,7 @@ async def simplify_with_gemini(clauses: List[str], language: str) -> dict:
     simplified_map = {}
 
     for i in range(0, len(clauses), 10):
-        batch = clauses[i:i+10]
+        batch = clauses[i:i + 10]
         # 1. Auditor
         p = _build_gemini_prompt(batch, target_lang)
         s, raw = await _call_gemini_api(p)
@@ -1394,12 +1394,12 @@ class SymbolicAnalysisEngine:
         high_risk_clauses_with_pages = []
         for page_num, clause in clauses_with_pages:
             confusion_score = cls.calculate_confusion_index(clause)
-            
+
             # ── CV FUSION: Boost risk if page is a TABLE ─────────────────────
             page_type = (page_types or {}).get(page_num, "TEXT")
             if page_type == "TABLE":
                 confusion_score += CV_TABLE_BOOST
-                
+
             if confusion_score > 55:  # Lowered from 70 to include Medium-High risk
                 high_risk_clauses_with_pages.append(
                     {"page": page_num, "text": clause, "score": confusion_score}
@@ -1547,9 +1547,9 @@ class SymbolicAnalysisEngine:
 
 
 async def _build_high_risk_response(
-    clauses: List[dict], 
-    simplified_map: dict, 
-    pdf_bytes: bytes, 
+    clauses: List[dict],
+    simplified_map: dict,
+    pdf_bytes: bytes,
     total: int,
     page_types: Dict[int, str] = None
 ):
@@ -1558,7 +1558,7 @@ async def _build_high_risk_response(
     for idx, c in enumerate(clauses, start=1):
         simplified = simplified_map.get(c["text"], "").strip() or _fallback_simplified_text(c["text"])
         coords = extract_coordinates_from_pdf(pdf_bytes, c["page"], c["text"])
-        
+
         # Use first match if coordinates found, otherwise empty list (no phantom highlights)
         response_clauses.append(
             HighRiskClauseAnalysis(
@@ -1568,7 +1568,7 @@ async def _build_high_risk_response(
                 original_text=c["text"],
                 simplified=simplified,
                 risk_score=c["score"],
-                highlight_coords=coords or [], # Return empty rather than generic boxes
+                highlight_coords=coords or [],  # Return empty rather than generic boxes
             )
         )
     return HighRiskAnalysisResponse(
@@ -1585,7 +1585,7 @@ async def _build_high_risk_response(
 
 
 @app.post("/analyze/upload", response_model=HighRiskAnalysisResponse)
-async def analyze_upload(
+async def analyze_upload(  # noqa: C901
     background_tasks: BackgroundTasks,
     language: str = Query(..., description="User-selected language code"),
     file: UploadFile = File(...),
@@ -1666,7 +1666,12 @@ async def analyze_upload(
         async def scan_page(page_num, doc_bytes):
             try:
                 single_page = fitz.open()
-                single_page.insert_pdf(fitz.open(stream=doc_bytes, filetype="pdf"), from_page=page_num-1, to_page=page_num-1)
+                single_page.insert_pdf(
+                    fitz.open(
+                        stream=doc_bytes,
+                        filetype="pdf"),
+                    from_page=page_num - 1,
+                    to_page=page_num - 1)
                 buf = io.BytesIO()
                 single_page.save(buf)
                 buf.seek(0)
@@ -1675,7 +1680,8 @@ async def analyze_upload(
                     resp = await client.post(f"{CV_CLASSIFIER_URL}/classify-page", files=files)
                     if resp.status_code == 200:
                         return page_num, resp.json().get("page_type", "TEXT")
-            except: pass
+            except Exception:
+                pass
             return page_num, "TEXT"
 
         # Scan all pages in parallel (capped at 10 pages for demo speed)
@@ -2110,18 +2116,18 @@ async def get_system_telemetry():
 class MLRiskRequest(BaseModel):
     clause: str
     compare_symbolic: bool = True   # also run the rule-based engine for A/B
-    page_type: Optional[str] = "TEXT" # New: "TABLE", "TEXT", etc.
+    page_type: Optional[str] = "TEXT"  # New: "TABLE", "TEXT", etc.
 
 
 class MLRiskResponse(BaseModel):
     clause: str
-    ml_risk_level:   str
-    ml_confidence:   float
+    ml_risk_level: str
+    ml_confidence: float
     ml_probabilities: Dict
-    ml_features:     Dict
+    ml_features: Dict
     symbolic_risk_level: Optional[str] = None   # from deterministic engine
-    symbolic_score:      Optional[float] = None
-    model_status:        str   # "READY" | "NOT_TRAINED"
+    symbolic_score: Optional[float] = None
+    model_status: str   # "READY" | "NOT_TRAINED"
 
 
 @app.post("/analyze/ml-risk", response_model=MLRiskResponse)
@@ -2145,22 +2151,22 @@ async def analyze_ml_risk(request: MLRiskRequest) -> MLRiskResponse:
         pred = predict_risk(clause, ML_RF_MODEL, ML_LE)
     else:
         pred = {
-            "risk_level":    "UNKNOWN",
-            "confidence":    0.0,
+            "risk_level": "UNKNOWN",
+            "confidence": 0.0,
             "probabilities": {},
-            "features":      {},
-            "error":         "Model not trained. Run AVAGAMYA_EDA.ipynb first.",
+            "features": {},
+            "error": "Model not trained. Run AVAGAMYA_EDA.ipynb first.",
         }
 
     # ── CV FUSION: Apply boost to symbolic score if on a table ────────────────
     sym_level, sym_score = None, None
     if request.compare_symbolic:
         sym_score, _ = MathematicalRiskEngine.calculate_risk_score(clause)
-        
+
         # Apply CV boost if applicable
         if request.page_type == "TABLE":
             sym_score += CV_TABLE_BOOST
-            
+
         if sym_score <= 40:
             sym_level = "LOW"
         elif sym_score <= 70:
@@ -2212,7 +2218,7 @@ async def get_document_analytics():
     df = pd.DataFrame(rows)
 
     # ── Data Cleaning ─────────────────────────────────────────────────────────
-    df["timestamp"]       = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["processing_time"] = pd.to_numeric(df["processing_time"], errors="coerce")
 
     # Parse numeric risk score (stored as string like "3 High Risk Clauses")
@@ -2229,20 +2235,20 @@ async def get_document_analytics():
     df = df.drop_duplicates(subset=["unique_hash"], keep="last")
 
     # ── Feature Engineering ───────────────────────────────────────────────────
-    df["date"]     = df["timestamp"].dt.date.astype(str)
-    df["hour"]     = df["timestamp"].dt.hour
+    df["date"] = df["timestamp"].dt.date.astype(str)
+    df["hour"] = df["timestamp"].dt.hour
     df["is_blocked"] = (df["status"] == "BLOCKED").astype(int)
 
     # ── Aggregations (NumPy + Pandas) ─────────────────────────────────────────
-    total_docs     = int(len(df))
-    blocked_count  = int(df["is_blocked"].sum())
-    clean_count    = total_docs - blocked_count
+    total_docs = int(len(df))
+    blocked_count = int(df["is_blocked"].sum())
+    clean_count = total_docs - blocked_count
     compliance_pct = round(clean_count / total_docs * 100, 2) if total_docs else 0.0
 
-    avg_proc_time   = round(float(df["processing_time"].mean()), 3) if not df["processing_time"].isna().all() else 0.0
-    p95_proc_time   = round(float(np.percentile(df["processing_time"].dropna(), 95)), 3) if len(df) else 0.0
-    avg_risk_count  = round(float(df["risk_count"].mean()), 2)
-    max_risk_count  = int(df["risk_count"].max())
+    avg_proc_time = round(float(df["processing_time"].mean()), 3) if not df["processing_time"].isna().all() else 0.0
+    p95_proc_time = round(float(np.percentile(df["processing_time"].dropna(), 95)), 3) if len(df) else 0.0
+    avg_risk_count = round(float(df["risk_count"].mean()), 2)
+    max_risk_count = int(df["risk_count"].max())
 
     # Status breakdown
     status_dist = df["status"].value_counts().to_dict()
@@ -2271,23 +2277,23 @@ async def get_document_analytics():
     )
 
     return {
-        "total_documents":      total_docs,
-        "clean_count":          clean_count,
-        "blocked_count":        blocked_count,
+        "total_documents": total_docs,
+        "clean_count": clean_count,
+        "blocked_count": blocked_count,
         "compliance_percentage": compliance_pct,
         "processing_time_stats": {
-            "avg_seconds":  avg_proc_time,
-            "p95_seconds":  p95_proc_time,
+            "avg_seconds": avg_proc_time,
+            "p95_seconds": p95_proc_time,
         },
         "risk_stats": {
             "avg_high_risk_clauses": avg_risk_count,
             "max_high_risk_clauses": max_risk_count,
         },
-        "status_distribution":   status_dist,
+        "status_distribution": status_dist,
         "language_distribution": lang_dist,
-        "daily_upload_trend":    daily_trend,
-        "peak_upload_hour":      peak_hour,
-        "top_risk_documents":    top_risk_docs,
+        "daily_upload_trend": daily_trend,
+        "peak_upload_hour": peak_hour,
+        "top_risk_documents": top_risk_docs,
     }
 
 
@@ -2353,10 +2359,10 @@ async def analyze_tfidf_score(request: TFIDFRequest):
 
         clause_tfidf_sum = float(round(row.sum(), 4))
         results.append({
-            "clause_index":  i,
+            "clause_index": i,
             "clause_preview": clause[:80] + ("..." if len(clause) > 80 else ""),
             "tfidf_jargon_weight": clause_tfidf_sum,
-            "top_jargon_terms":   hits,
+            "top_jargon_terms": hits,
         })
 
     # Document-level: which jargon terms dominate the whole doc
@@ -2368,9 +2374,9 @@ async def analyze_tfidf_score(request: TFIDFRequest):
     ][:10]
 
     return {
-        "total_clauses":    len(clauses),
+        "total_clauses": len(clauses),
         "top_document_jargon": top_doc_jargon,
-        "clause_scores":    results,
+        "clause_scores": results,
     }
 
 
@@ -2393,7 +2399,7 @@ async def export_compliance_dataset(fmt: str = Query("json", description="'json'
 
     # ── Pull both tables ────────────────────────────────────────────────────
     try:
-        logs  = supabase.table("compliance_logs").select("*").execute().data
+        logs = supabase.table("compliance_logs").select("*").execute().data
         cache = supabase.table("document_cache").select("file_hash,confusion_index").execute().data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Supabase read failed: {e}")
@@ -2401,14 +2407,14 @@ async def export_compliance_dataset(fmt: str = Query("json", description="'json'
     if not logs:
         raise HTTPException(status_code=404, detail="No compliance data found")
 
-    df_logs  = pd.DataFrame(logs)
+    df_logs = pd.DataFrame(logs)
     df_cache = pd.DataFrame(cache) if cache else pd.DataFrame(columns=["file_hash", "confusion_index"])
 
     # ── Join ─────────────────────────────────────────────────────────────
     df = pd.merge(df_logs, df_cache, left_on="unique_hash", right_on="file_hash", how="left")
 
     # ── Data Cleaning ─────────────────────────────────────────────────────────
-    df["timestamp"]       = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["processing_time"] = pd.to_numeric(df["processing_time"], errors="coerce")
     df["confusion_index"] = pd.to_numeric(df["confusion_index"], errors="coerce")
     df["risk_count"] = (
@@ -2418,10 +2424,10 @@ async def export_compliance_dataset(fmt: str = Query("json", description="'json'
     df = df.dropna(subset=["timestamp"])
 
     # ── Feature Engineering ───────────────────────────────────────────────────
-    df["is_blocked"]     = (df["status"] == "BLOCKED").astype(int)
-    df["is_regional"]    = df["language_detected"].isin(["hi", "mr"]).astype(int)
-    df["hour_of_day"]    = df["timestamp"].dt.hour
-    df["day_of_week"]    = df["timestamp"].dt.day_name()
+    df["is_blocked"] = (df["status"] == "BLOCKED").astype(int)
+    df["is_regional"] = df["language_detected"].isin(["hi", "mr"]).astype(int)
+    df["hour_of_day"] = df["timestamp"].dt.hour
+    df["day_of_week"] = df["timestamp"].dt.day_name()
     df["processing_speed"] = np.where(
         df["processing_time"] > 0,
         (df["risk_count"] / df["processing_time"]).round(3),
@@ -2452,13 +2458,15 @@ async def export_compliance_dataset(fmt: str = Query("json", description="'json'
         )
 
     return {
-        "total_records":     int(len(df_export)),
-        "columns":           export_cols,
+        "total_records": int(len(df_export)),
+        "columns": export_cols,
         "feature_engineered": ["is_blocked", "is_regional", "hour_of_day", "day_of_week", "processing_speed"],
-        "dataset":           df_export.fillna(0).to_dict(orient="records"),
+        "dataset": df_export.fillna(0).to_dict(orient="records"),
     }
 
 # ── CV Page Classifier Proxy (Feature 3 - Feature C) ────────────────────────
+
+
 @app.post("/analyze/cv-verify-page")
 async def verify_page_type(
     file: UploadFile = File(...),
@@ -2470,40 +2478,42 @@ async def verify_page_type(
     """
     if not PYMUPDF_AVAILABLE:
         raise HTTPException(status_code=500, detail="PyMuPDF not installed on backend")
-        
+
     try:
         # Read the uploaded PDF
         pdf_bytes = await file.read()
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        
+
         if page_number < 1 or page_number > len(doc):
             raise HTTPException(status_code=400, detail=f"Invalid page number. Document has {len(doc)} pages.")
-            
+
         # Extract only the target page as a new PDF in memory
         single_page_doc = fitz.open()
-        single_page_doc.insert_pdf(doc, from_page=page_number-1, to_page=page_number-1)
-        
+        single_page_doc.insert_pdf(doc, from_page=page_number - 1, to_page=page_number - 1)
+
         # Write to buffer
         buffer = io.BytesIO()
         single_page_doc.save(buffer)
         buffer.seek(0)
-        
+
         # Call the Cloud Run microservice
         async with httpx.AsyncClient(timeout=30.0) as client:
             files = {'file': ('page.pdf', buffer, 'application/pdf')}
             response = await client.post(f"{CV_CLASSIFIER_URL}/classify-page", files=files)
-            
+
             if response.status_code != 200:
                 return JSONResponse(
                     status_code=response.status_code,
                     content={"error": "CV Microservice failure", "details": response.text}
                 )
-                
+
             return response.json()
-            
+
     except Exception as e:
         print(f"❌ CV Verification Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if 'doc' in locals(): doc.close()
-        if 'single_page_doc' in locals(): single_page_doc.close()
+        if 'doc' in locals():
+            doc.close()
+        if 'single_page_doc' in locals():
+            single_page_doc.close()

@@ -1,5 +1,5 @@
-import fitz  # PyMuPDF
 import numpy as np
+
 
 def extract_page_features(page) -> list:
     """
@@ -15,7 +15,7 @@ def extract_page_features(page) -> list:
     # 3. Page fill ratio (how much of page has content)
     rect = page.rect
     page_area = rect.width * rect.height
-    content_area = sum((b[2]-b[0])*(b[3]-b[1]) for b in blocks)
+    content_area = sum((b[2] - b[0]) * (b[3] - b[1]) for b in blocks)
     fill_ratio = content_area / page_area if page_area > 0 else 0
 
     # 4. Horizontal line count (table indicator)
@@ -41,16 +41,16 @@ def extract_page_features(page) -> list:
                  for s in line["spans"]]
         sizes = [s["size"] for s in spans]
         font_variance = np.std(sizes) if sizes else 0
-    except:
+    except Exception:
         font_variance = 0
 
     return [
-        float(text_block_count), 
-        float(image_count), 
+        float(text_block_count),
+        float(image_count),
         float(fill_ratio),
-        float(h_lines), 
-        float(v_lines), 
+        float(h_lines),
+        float(v_lines),
         float(grid_score),
-        float(words_per_block), 
+        float(words_per_block),
         float(font_variance)
     ]

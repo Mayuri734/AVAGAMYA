@@ -18,7 +18,6 @@ Satisfies JD bullets:
 
 from __future__ import annotations
 
-import os
 import re
 import json
 import warnings
@@ -39,17 +38,16 @@ from sklearn.metrics import (
     accuracy_score,
 )
 from sklearn.preprocessing import LabelEncoder
-from sklearn.pipeline import Pipeline
 
 warnings.filterwarnings("ignore")
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
 MODEL_DIR = Path(__file__).parent
-RF_MODEL_PATH  = MODEL_DIR / "risk_rf_model.pkl"
-LR_MODEL_PATH  = MODEL_DIR / "risk_lr_model.pkl"
-ENCODER_PATH   = MODEL_DIR / "label_encoder.pkl"
-METADATA_PATH  = MODEL_DIR / "model_metadata.json"
+RF_MODEL_PATH = MODEL_DIR / "risk_rf_model.pkl"
+LR_MODEL_PATH = MODEL_DIR / "risk_lr_model.pkl"
+ENCODER_PATH = MODEL_DIR / "label_encoder.pkl"
+METADATA_PATH = MODEL_DIR / "model_metadata.json"
 
 # ── Jargon vocabulary (mirrors compliance_engine.py) ─────────────────────────
 
@@ -109,10 +107,10 @@ def extract_features(clause: str) -> np.ndarray:
     except Exception:
         flesch = 50.0
 
-    has_currency   = 1.0 if re.search(r"[₹]|Rs\.?|INR", clause) else 0.0
+    has_currency = 1.0 if re.search(r"[₹]|Rs\.?|INR", clause) else 0.0
     has_percentage = 1.0 if "%" in clause else 0.0
     has_devanagari = 1.0 if is_indic else 0.0
-    has_reg_risk   = 1.0 if any(w in clause for w in REGIONAL_RISK_WORDS) else 0.0
+    has_reg_risk = 1.0 if any(w in clause for w in REGIONAL_RISK_WORDS) else 0.0
 
     # Sentence length z-score proxy (normalised against typical clause of 20 words)
     sent_len_z = (word_count - 20.0) / 15.0
@@ -237,7 +235,7 @@ def train_and_evaluate(
     )
     rf.fit(X_train, y_train)
     rf_preds = rf.predict(X_test)
-    rf_acc   = accuracy_score(y_test, rf_preds)
+    rf_acc = accuracy_score(y_test, rf_preds)
 
     # 5-fold cross-validation
     cv_scores = cross_val_score(rf, X, y, cv=5, scoring="accuracy")
@@ -256,7 +254,7 @@ def train_and_evaluate(
     lr.fit(X_train, y_train)
     lr_acc = accuracy_score(y_test, lr.predict(X_test))
     print(f"\n📌 Baseline Logistic Regression Accuracy: {lr_acc:.4f}")
-    print(f"   (RF lift over LR: +{(rf_acc - lr_acc)*100:.2f}pp)")
+    print(f"   (RF lift over LR: +{(rf_acc - lr_acc) * 100:.2f}pp)")
 
     # ── Feature Importances ───────────────────────────────────────────────────
     importances = dict(zip(FEATURE_NAMES, rf.feature_importances_.tolist()))
@@ -267,22 +265,22 @@ def train_and_evaluate(
 
     # ── Metadata ──────────────────────────────────────────────────────────────
     metrics = {
-        "rf_accuracy":        round(rf_acc, 4),
-        "lr_accuracy":        round(lr_acc, 4),
-        "cv_mean":            round(cv_scores.mean(), 4),
-        "cv_std":             round(cv_scores.std(), 4),
-        "train_size":         len(X_train),
-        "test_size":          len(X_test),
+        "rf_accuracy": round(rf_acc, 4),
+        "lr_accuracy": round(lr_acc, 4),
+        "cv_mean": round(cv_scores.mean(), 4),
+        "cv_std": round(cv_scores.std(), 4),
+        "train_size": len(X_train),
+        "test_size": len(X_test),
         "label_distribution": label_dist,
         "classification_report": report_str,
         "feature_importances": importances,
     }
 
     return {
-        "rf_model":          rf,
-        "lr_model":          lr,
-        "label_encoder":     le,
-        "metrics":           metrics,
+        "rf_model": rf,
+        "lr_model": lr,
+        "label_encoder": le,
+        "metrics": metrics,
     }
 
 
@@ -290,17 +288,17 @@ def train_and_evaluate(
 
 def save_models(rf_model, lr_model, label_encoder, metrics: Dict) -> None:
     """Persist all artefacts to ml_models/ directory."""
-    joblib.dump(rf_model,     RF_MODEL_PATH)
-    joblib.dump(lr_model,     LR_MODEL_PATH)
+    joblib.dump(rf_model, RF_MODEL_PATH)
+    joblib.dump(lr_model, LR_MODEL_PATH)
     joblib.dump(label_encoder, ENCODER_PATH)
 
     # Save human-readable metadata
     meta = {
-        "model_type":         "RandomForestClassifier",
-        "n_features":         11,
-        "feature_names":      FEATURE_NAMES,
-        "label_classes":      list(label_encoder.classes_),
-        "metrics":            {
+        "model_type": "RandomForestClassifier",
+        "n_features": 11,
+        "feature_names": FEATURE_NAMES,
+        "label_classes": list(label_encoder.classes_),
+        "metrics": {
             k: v for k, v in metrics.items()
             if k not in ("classification_report",)   # skip long string
         },
@@ -348,22 +346,22 @@ def predict_risk(
                 "probabilities": {}, "features": {}, "error": "Model not trained yet"}
 
     features = extract_features(clause).reshape(1, -1)
-    pred_idx  = rf_model.predict(features)[0]
-    proba     = rf_model.predict_proba(features)[0]
+    pred_idx = rf_model.predict(features)[0]
+    proba = rf_model.predict_proba(features)[0]
 
-    risk_level  = label_encoder.inverse_transform([pred_idx])[0]
-    confidence  = round(float(proba[pred_idx]), 4)
-    proba_dict  = {
+    risk_level = label_encoder.inverse_transform([pred_idx])[0]
+    confidence = round(float(proba[pred_idx]), 4)
+    proba_dict = {
         cls: round(float(p), 4)
         for cls, p in zip(label_encoder.classes_, proba)
     }
     feature_vals = dict(zip(FEATURE_NAMES, features[0].tolist()))
 
     return {
-        "risk_level":    risk_level,
-        "confidence":    confidence,
+        "risk_level": risk_level,
+        "confidence": confidence,
         "probabilities": proba_dict,
-        "features":      feature_vals,
+        "features": feature_vals,
     }
 
 
@@ -377,19 +375,27 @@ def generate_synthetic_dataset(n: int = 600) -> Tuple[List[str], List[str]]:
     """
     templates = {
         "HIGH": [
-            "The bank reserves the sole discretion to levy a penalty of ₹{amount} for any breach of the agreed terms without prior notice.",
-            "Cardholder shall indemnify and hold harmless the bank from any unlimited liability arising out of default or non-payment.",
+            "The bank reserves the sole discretion to levy a penalty of ₹{amount} "
+            "for any breach of the agreed terms without prior notice.",
+            "Cardholder shall indemnify and hold harmless the bank from any "
+            "unlimited liability arising out of default or non-payment.",
             "In the event of arbitration, the governing law of jurisdiction shall bind both parties exclusively.",
-            "The bank may forfeit the security deposit and revoke account privileges if the borrower defaults on the agreed repayment schedule.",
-            "Disclaimer: The bank shall not be liable for any loss arising from sole discretion decisions regarding the waiver of dues.",
-            "Any breach of these conditions shall result in forfeiture of all accumulated reward points and imposition of a surcharge.",
+            "The bank may forfeit the security deposit and revoke account privileges "
+            "if the borrower defaults on the agreed repayment schedule.",
+            "Disclaimer: The bank shall not be liable for any loss arising from "
+            "sole discretion decisions regarding the waiver of dues.",
+            "Any breach of these conditions shall result in forfeiture of all "
+            "accumulated reward points and imposition of a surcharge.",
             "दंड: ग्राहक को ₹{amount} का जुर्माना देना होगा यदि वह निर्धारित अवधि में भुगतान नहीं करता।",
             "बँक एकट्याच्या विवेकानुसार कोणत्याही क्षणी खाते रद्द करण्याचा अधिकार राखते.",
         ],
         "MEDIUM": [
-            "The interest rate applicable shall be {rate}% per annum calculated on a monthly reducing balance basis.",
-            "The cardholder is required to pay a minimum due of ₹{amount} by the payment due date each billing cycle.",
-            "The bank may at its discretion waive late fee charges if payment is received within {days} days of due date.",
+            "The interest rate applicable shall be {rate}% per annum calculated "
+            "on a monthly reducing balance basis.",
+            "The cardholder is required to pay a minimum due of ₹{amount} by the "
+            "payment due date each billing cycle.",
+            "The bank may at its discretion waive late fee charges if payment "
+            "is received within {days} days of due date.",
             "Customers are advised that charges may apply for balance enquiry and mini-statement requests at non-home branch ATMs.",
             "The annual fee of ₹{amount} will be levied on the primary card on the anniversary of the card issuance date.",
             "व्याज दर: वार्षिक {rate}% की दर से ब्याज लिया जाएगा यदि भुगतान समय पर नहीं किया गया।",
@@ -406,12 +412,12 @@ def generate_synthetic_dataset(n: int = 600) -> Tuple[List[str], List[str]]:
     }
 
     amounts = [500, 1000, 2500, 5000, 10000, 25000, 50000]
-    rates   = [8.5, 10.0, 12.5, 15.0, 18.0, 24.0, 36.0]
-    days    = [3, 5, 7, 10, 15, 30]
+    rates = [8.5, 10.0, 12.5, 15.0, 18.0, 24.0, 36.0]
+    days = [3, 5, 7, 10, 15, 30]
 
     rng = np.random.default_rng(seed=42)
     clauses_out: List[str] = []
-    labels_out:  List[str] = []
+    labels_out: List[str] = []
 
     per_class = n // 3
     for label, tmps in templates.items():
@@ -420,8 +426,8 @@ def generate_synthetic_dataset(n: int = 600) -> Tuple[List[str], List[str]]:
             clause = (
                 tmpl
                 .replace("{amount}", str(amounts[rng.integers(len(amounts))]))
-                .replace("{rate}",   str(rates[rng.integers(len(rates))]))
-                .replace("{days}",   str(days[rng.integers(len(days))]))
+                .replace("{rate}", str(rates[rng.integers(len(rates))]))
+                .replace("{days}", str(days[rng.integers(len(days))]))
             )
             clauses_out.append(clause)
             labels_out.append(label)
@@ -464,4 +470,3 @@ if __name__ == "__main__":
     for tc in test_clauses:
         pred = predict_risk(tc, rf, le)
         print(f"  [{pred['risk_level']:6s} | conf={pred['confidence']:.2f}]  {tc[:60]}...")
-
