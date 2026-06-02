@@ -396,8 +396,10 @@ def generate_synthetic_dataset(n: int = 600) -> Tuple[List[str], List[str]]:
             "payment due date each billing cycle.",
             "The bank may at its discretion waive late fee charges if payment "
             "is received within {days} days of due date.",
-            "Customers are advised that charges may apply for balance enquiry and mini-statement requests at non-home branch ATMs.",
-            "The annual fee of ₹{amount} will be levied on the primary card on the anniversary of the card issuance date.",
+            "Customers are advised that charges may apply for balance enquiry "
+            "and mini-statement requests at non-home branch ATMs.",
+            "The annual fee of ₹{amount} will be levied on the primary card "
+            "on the anniversary of the card issuance date.",
             "व्याज दर: वार्षिक {rate}% की दर से ब्याज लिया जाएगा यदि भुगतान समय पर नहीं किया गया।",
         ],
         "LOW": [

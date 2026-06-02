@@ -1693,7 +1693,9 @@ async def analyze_upload(  # noqa: C901
         print(f"⚠️ CV Parallel Scan Failed: {e}")
 
     # ---------- STEP 5: If OK, run High-Risk-Only Analysis Engine ----------
-    high_risk_result = await SymbolicAnalysisEngine.analyze_high_risk_only(pages_data, pdf_bytes, language, page_types=page_types)
+    high_risk_result = await SymbolicAnalysisEngine.analyze_high_risk_only(
+        pages_data, pdf_bytes, language, page_types=page_types
+    )
 
     # ---------- STEP 5: CACHE WRITE (non-blocking, after pipeline completes) ----------
     if high_risk_result.high_risk_clauses:
