@@ -8,6 +8,7 @@ import hashlib
 import asyncio
 import unicodedata
 import gc
+import io
 import httpx
 
 # ── ML / Data-Science layer (Feature 1 & 2) ─────────────────────────────────
@@ -60,7 +61,7 @@ except ImportError:
 
 # Gemini API (optional, graceful fallback if not configured)
 try:
-    from google import genai
+    import google.generativeai as genai
 
     GEMINI_AVAILABLE = True
 except ImportError:
@@ -92,6 +93,8 @@ else:
     GEMINI_MODEL = None
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
+CV_CLASSIFIER_URL = "https://cv-page-classifier-353319363820.asia-south1.run.app"
+CV_TABLE_BOOST = 15.0  # Points added to risk score for clauses in tables
 
 # ---------------------------------------------------------------------------
 # App & CORS
@@ -303,6 +306,7 @@ class PiiScanResponse(BaseModel):
 class ClauseAnalysis(BaseModel):
     id: int
     page: int
+    page_type: Optional[str] = "TEXT" # New
     original_text: str
     risk_level: str  # "LOW" | "MEDIUM" | "HIGH"
     confusion_score: float
@@ -315,6 +319,7 @@ class HighRiskClauseAnalysis(BaseModel):
 
     id: int
     page: int
+    page_type: Optional[str] = "TEXT" # New
     original_text: str
     simplified: str  # Gemini-generated simple explanation
     risk_score: float  # Confusion score
@@ -418,44 +423,88 @@ def extract_coordinates_from_pdf(
 ) -> Optional[List[List[int]]]:
     """
     Extract bounding box coordinates for a clause using PyMuPDF (fitz).
+    Improved: Robust word-by-word matching to handle PDF line breaks.
     """
     if not PYMUPDF_AVAILABLE:
-        return [[int(page_num), 50, 100, 500, 40]]
+        return None
 
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
             return None
         page = doc[page_num - 1]
-        text = re.sub(r"\s+", " ", (clause_text or "").replace("\n", " ")).strip()
-        if not text:
+        
+        # 1. Normalize and split input text into words
+        clean_target = _normalize_text_for_matching(clause_text)
+        target_words = [w for w in clean_target.split() if len(w) > 1]
+        if not target_words:
             return None
 
-        # Normalization for matching
-        expected_words = [_clean_word_for_matching(w) for w in text.split() if _clean_word_for_matching(w)]
-        if not expected_words:
+        # 2. Get all words from PDF page with their rects
+        pdf_words = page.get_text("words") # (x0, y0, x1, y1, "word", block_no, line_no, word_no)
+        
+        # 3. Sliding window search for the word sequence
+        # We allow a small gap (max 3 words) to handle inserted page numbers or noise
+        best_match_rects = []
+        max_words = len(pdf_words)
+        target_len = len(target_words)
+        
+        for i in range(max_words):
+            current_pdf_word = _clean_word_for_matching(pdf_words[i][4])
+            if current_pdf_word == target_words[0]:
+                # Potential start!
+                matched_rects = [fitz.Rect(pdf_words[i][:4])]
+                target_idx = 1
+                pdf_idx = i + 1
+                
+                while target_idx < target_len and pdf_idx < max_words:
+                    pdf_w = _clean_word_for_matching(pdf_words[pdf_idx][4])
+                    if pdf_w == target_words[target_idx]:
+                        matched_rects.append(fitz.Rect(pdf_words[pdf_idx][:4]))
+                        target_idx += 1
+                    elif len(pdf_w) < 2: # Skip noise/punctuation
+                        pass
+                    else:
+                        # Allow skipping up to 2 words in PDF (page numbers, etc)
+                        lookahead = 1
+                        found = False
+                        while lookahead <= 2 and (pdf_idx + lookahead) < max_words:
+                            if _clean_word_for_matching(pdf_words[pdf_idx + lookahead][4]) == target_words[target_idx]:
+                                pdf_idx += lookahead
+                                matched_rects.append(fitz.Rect(pdf_words[pdf_idx][:4]))
+                                target_idx += 1
+                                found = True
+                                break
+                            lookahead += 1
+                        if not found:
+                            break
+                    pdf_idx += 1
+                
+                if target_idx >= target_len * 0.8: # 80% match threshold for fuzzy recovery
+                    best_match_rects = matched_rects
+                    break
+
+        if not best_match_rects:
             return None
 
-        pdf_words = page.get_text("words")
-        match_rects = _find_exact_sequence(pdf_words, expected_words)
-        if not match_rects:
-            match_rects = _find_anchor_sequence(pdf_words, expected_words)
-        if not match_rects:
-            return None
-
-        # Group words by line (y0) to ensure multi-line paragraph highlighting is discrete
+        # 4. Group rects into lines for cleaner UI highlights
         lines_dict = {}
-        for r in match_rects:
-            y_key = round(r.y0 / 5) * 5
+        for r in best_match_rects:
+            y_key = round(r.y0 / 4) * 4 # Group by Y coordinate with small tolerance
             lines_dict.setdefault(y_key, []).append(r)
 
-        return [[int(page_num), int(min(r.x0 for r in line)), int(min(r.y0 for r in line)),
-                 int(max(r.x1 for r in line) - min(r.x0 for r in line)),
-                 int(max(r.y1 for r in line) - min(r.y0 for r in line)) + 2]
-                for line in lines_dict.values()]
+        highlights = []
+        for line in lines_dict.values():
+            x0 = min(r.x0 for r in line)
+            y0 = min(r.y0 for r in line)
+            x1 = max(r.x1 for r in line)
+            y1 = max(r.y1 for r in line)
+            highlights.append([int(page_num), int(x0), int(y0), int(x1-x0), int(y1-y0) + 2])
+            
+        return highlights
     except Exception as e:
-        print(f"Error in extract_coordinates: {e}")
-        return [[int(page_num), 50, 100, 500, 40]]
+        print(f"Highlighting Error: {e}")
+        return None
 
 
 def _process_regional_clause(clause: str) -> Optional[str]:
@@ -1316,6 +1365,7 @@ class SymbolicAnalysisEngine:
         pages_data: List[Tuple[int, str]],
         pdf_bytes: bytes,
         language: str,
+        page_types: Dict[int, str] = None  # New: Page classification metadata
     ) -> HighRiskAnalysisResponse:
         """
         HIGH-RISK-ONLY ANALYSIS PIPELINE WITH SEMANTIC VALIDATOR
@@ -1344,7 +1394,13 @@ class SymbolicAnalysisEngine:
         high_risk_clauses_with_pages = []
         for page_num, clause in clauses_with_pages:
             confusion_score = cls.calculate_confusion_index(clause)
-            if confusion_score > 70:
+            
+            # ── CV FUSION: Boost risk if page is a TABLE ─────────────────────
+            page_type = (page_types or {}).get(page_num, "TEXT")
+            if page_type == "TABLE":
+                confusion_score += CV_TABLE_BOOST
+                
+            if confusion_score > 55:  # Lowered from 70 to include Medium-High risk
                 high_risk_clauses_with_pages.append(
                     {"page": page_num, "text": clause, "score": confusion_score}
                 )
@@ -1354,7 +1410,7 @@ class SymbolicAnalysisEngine:
         simplified_map = await cls._orchestrate_ai_simplification(texts_to_simplify, language)
 
         return await _build_high_risk_response(
-            high_risk_clauses_with_pages, simplified_map, pdf_bytes, total_scanned
+            high_risk_clauses_with_pages, simplified_map, pdf_bytes, total_scanned, page_types
         )
 
     @classmethod
@@ -1390,7 +1446,7 @@ class SymbolicAnalysisEngine:
 
     @classmethod
     def analyze_page_aware(
-        cls, pages_data: List[Tuple[int, str]]
+        cls, pages_data: List[Tuple[int, str]], page_types: Dict[int, str] = None
     ) -> SymbolicAnalysisResponse:
         """
         Main Analysis Pipeline (Page-Aware)
@@ -1461,6 +1517,7 @@ class SymbolicAnalysisEngine:
             clause_analysis = ClauseAnalysis(
                 id=clause_id,
                 page=page_num,
+                page_type=page_types.get(page_num, "TEXT") if page_types else "TEXT",
                 original_text=clause,
                 risk_level=risk_level,
                 confusion_score=confusion_score,
@@ -1489,22 +1546,29 @@ class SymbolicAnalysisEngine:
         )
 
 
-async def _build_high_risk_response(clauses: List[dict], simplified_map: dict, pdf_bytes: bytes, total: int):
+async def _build_high_risk_response(
+    clauses: List[dict], 
+    simplified_map: dict, 
+    pdf_bytes: bytes, 
+    total: int,
+    page_types: Dict[int, str] = None
+):
     """Construct HighRiskAnalysisResponse from filtered clauses."""
     response_clauses = []
     for idx, c in enumerate(clauses, start=1):
         simplified = simplified_map.get(c["text"], "").strip() or _fallback_simplified_text(c["text"])
         coords = extract_coordinates_from_pdf(pdf_bytes, c["page"], c["text"])
-        if not coords:
-            coords = [[c["page"], 50, 100, 500, 120]]
+        
+        # Use first match if coordinates found, otherwise empty list (no phantom highlights)
         response_clauses.append(
             HighRiskClauseAnalysis(
                 id=idx,
                 page=c["page"],
+                page_type=page_types.get(c["page"], "TEXT") if page_types else "TEXT",
                 original_text=c["text"],
                 simplified=simplified,
                 risk_score=c["score"],
-                highlight_coords=coords,
+                highlight_coords=coords or [], # Return empty rather than generic boxes
             )
         )
     return HighRiskAnalysisResponse(
@@ -1596,8 +1660,34 @@ async def analyze_upload(
             media_type="application/json",
         )
 
-    # ---------- STEP 4: If OK, run High-Risk-Only Analysis Engine ----------
-    high_risk_result = await SymbolicAnalysisEngine.analyze_high_risk_only(pages_data, pdf_bytes, language)
+    # ---------- STEP 4: CV Layout Analysis (Parallel Microservice) ----------
+    page_types = {}
+    try:
+        async def scan_page(page_num, doc_bytes):
+            try:
+                single_page = fitz.open()
+                single_page.insert_pdf(fitz.open(stream=doc_bytes, filetype="pdf"), from_page=page_num-1, to_page=page_num-1)
+                buf = io.BytesIO()
+                single_page.save(buf)
+                buf.seek(0)
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    files = {'file': ('p.pdf', buf, 'application/pdf')}
+                    resp = await client.post(f"{CV_CLASSIFIER_URL}/classify-page", files=files)
+                    if resp.status_code == 200:
+                        return page_num, resp.json().get("page_type", "TEXT")
+            except: pass
+            return page_num, "TEXT"
+
+        # Scan all pages in parallel (capped at 10 pages for demo speed)
+        scan_tasks = [scan_page(p_num, pdf_bytes) for p_num, _ in pages_data[:10]]
+        cv_results = await asyncio.gather(*scan_tasks)
+        page_types = {p: t for p, t in cv_results}
+        print(f"🖼️ CV SCAN COMPLETE: {page_types}")
+    except Exception as e:
+        print(f"⚠️ CV Parallel Scan Failed: {e}")
+
+    # ---------- STEP 5: If OK, run High-Risk-Only Analysis Engine ----------
+    high_risk_result = await SymbolicAnalysisEngine.analyze_high_risk_only(pages_data, pdf_bytes, language, page_types=page_types)
 
     # ---------- STEP 5: CACHE WRITE (non-blocking, after pipeline completes) ----------
     if high_risk_result.high_risk_clauses:
@@ -2020,6 +2110,7 @@ async def get_system_telemetry():
 class MLRiskRequest(BaseModel):
     clause: str
     compare_symbolic: bool = True   # also run the rule-based engine for A/B
+    page_type: Optional[str] = "TEXT" # New: "TABLE", "TEXT", etc.
 
 
 class MLRiskResponse(BaseModel):
@@ -2061,10 +2152,15 @@ async def analyze_ml_risk(request: MLRiskRequest) -> MLRiskResponse:
             "error":         "Model not trained. Run AVAGAMYA_EDA.ipynb first.",
         }
 
-    # ── Symbolic (Deterministic) A/B Comparison ───────────────────────────────
+    # ── CV FUSION: Apply boost to symbolic score if on a table ────────────────
     sym_level, sym_score = None, None
     if request.compare_symbolic:
         sym_score, _ = MathematicalRiskEngine.calculate_risk_score(clause)
+        
+        # Apply CV boost if applicable
+        if request.page_type == "TABLE":
+            sym_score += CV_TABLE_BOOST
+            
         if sym_score <= 40:
             sym_level = "LOW"
         elif sym_score <= 70:
@@ -2361,3 +2457,53 @@ async def export_compliance_dataset(fmt: str = Query("json", description="'json'
         "feature_engineered": ["is_blocked", "is_regional", "hour_of_day", "day_of_week", "processing_speed"],
         "dataset":           df_export.fillna(0).to_dict(orient="records"),
     }
+
+# ── CV Page Classifier Proxy (Feature 3 - Feature C) ────────────────────────
+@app.post("/analyze/cv-verify-page")
+async def verify_page_type(
+    file: UploadFile = File(...),
+    page_number: int = Query(1, description="1-indexed page number to verify")
+):
+    """
+    Proxy endpoint to call the Google Cloud Run CV Page Classifier.
+    Extracts the specified page from the uploaded PDF and sends it to the microservice.
+    """
+    if not PYMUPDF_AVAILABLE:
+        raise HTTPException(status_code=500, detail="PyMuPDF not installed on backend")
+        
+    try:
+        # Read the uploaded PDF
+        pdf_bytes = await file.read()
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        
+        if page_number < 1 or page_number > len(doc):
+            raise HTTPException(status_code=400, detail=f"Invalid page number. Document has {len(doc)} pages.")
+            
+        # Extract only the target page as a new PDF in memory
+        single_page_doc = fitz.open()
+        single_page_doc.insert_pdf(doc, from_page=page_number-1, to_page=page_number-1)
+        
+        # Write to buffer
+        buffer = io.BytesIO()
+        single_page_doc.save(buffer)
+        buffer.seek(0)
+        
+        # Call the Cloud Run microservice
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            files = {'file': ('page.pdf', buffer, 'application/pdf')}
+            response = await client.post(f"{CV_CLASSIFIER_URL}/classify-page", files=files)
+            
+            if response.status_code != 200:
+                return JSONResponse(
+                    status_code=response.status_code,
+                    content={"error": "CV Microservice failure", "details": response.text}
+                )
+                
+            return response.json()
+            
+    except Exception as e:
+        print(f"❌ CV Verification Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'doc' in locals(): doc.close()
+        if 'single_page_doc' in locals(): single_page_doc.close()

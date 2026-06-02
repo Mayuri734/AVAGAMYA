@@ -50,6 +50,56 @@ export function PDFInspector({
   const containerRef = useRef<HTMLDivElement>(null)
   const pageRef = useRef<HTMLDivElement>(null)
 
+  // ── AI Page Classification (Feature 3 - Feature C) ────────────────────────
+  const [cvData, setCvData] = useState<Record<number, { type: string; confidence: number }>>({})
+  const [cvLoading, setCvLoading] = useState(false)
+
+  const fetchPageType = async (page: number) => {
+    if (cvData[page] || cvLoading || !pdfUrl) return
+    
+    setCvLoading(true)
+    try {
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+      
+      // 1. Get the PDF blob from the URL
+      const pdfBlob = await fetch(pdfUrl).then(r => r.blob())
+      const file = new File([pdfBlob], 'document.pdf', { type: 'application/pdf' })
+
+      // 2. Call our proxy endpoint
+      const formData = new FormData()
+      formData.append('file', file)
+      
+      const res = await fetch(`${baseUrl}/analyze/cv-verify-page?page_number=${page}`, {
+        method: 'POST',
+        body: formData
+      })
+      
+      if (res.ok) {
+        const result = await res.json()
+        setCvData(prev => ({ 
+          ...prev, 
+          [page]: { type: result.page_type, confidence: result.confidence } 
+        }))
+      }
+    } catch (err) {
+      console.error('AI Page Classification failed:', err)
+    } finally {
+      setCvLoading(false)
+    }
+  }
+
+  // Trigger classification when page changes
+  useEffect(() => {
+    if (numPages) fetchPageType(currentPage)
+  }, [currentPage, numPages, pdfUrl])
+
+  const PAGE_METADATA: Record<string, { icon: string; color: string; label: string }> = {
+    TABLE:  { icon: '📊', color: 'text-blue-600 bg-blue-50 border-blue-200', label: 'TABLE' },
+    TEXT:   { icon: '📄', color: 'text-slate-600 bg-slate-50 border-slate-200', label: 'TEXT' },
+    MIXED:  { icon: '🔀', color: 'text-purple-600 bg-purple-50 border-purple-200', label: 'MIXED' },
+    HEADER: { icon: '📋', color: 'text-amber-600 bg-amber-50 border-amber-200', label: 'HEADER' },
+  }
+
   // Dynamically calculate the safe width for the PDF based on the container constraints
   useEffect(() => {
     const updateWidth = () => {
@@ -310,6 +360,27 @@ export function PDFInspector({
         >
           <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5 text-slate-700" />
         </button>
+
+        {/* AI Page Type Badge */}
+        <div className="hidden md:flex items-center gap-1.5 ml-2 mr-1">
+          <div className="w-[1px] h-6 bg-slate-200 mr-2" />
+          {cvLoading ? (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-100 rounded-full animate-pulse">
+              <div className="w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">AI Scanning Page...</span>
+            </div>
+          ) : cvData[currentPage] ? (
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-300 ${PAGE_METADATA[cvData[currentPage].type]?.color || 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+              <span className="text-xs">{PAGE_METADATA[cvData[currentPage].type]?.icon || '✨'}</span>
+              <div className="flex flex-col">
+                <span className="text-[9px] font-black leading-none uppercase tracking-tighter">AI VERDICT</span>
+                <span className="text-[10px] font-bold leading-none mt-0.5">
+                  {cvData[currentPage].type} ({(cvData[currentPage].confidence * 100).toFixed(0)}%)
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {/* Status Bar */}

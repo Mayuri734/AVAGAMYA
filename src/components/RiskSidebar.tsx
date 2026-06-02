@@ -93,11 +93,27 @@ function getActionTip(riskLevel: string): string {
 }
 
 // ── ML Insight Panel (Consumer-Friendly) ─────────────────────────────────────
-const MLInsightPanel = ({ clauseText }: { clauseText: string }) => {
-  const [data, setData] = useState<MLInsightData | null>(null)
+const MLInsightPanel = ({
+  clauseText,
+  pageType = "TEXT", // New
+  prefetchedData,
+}: {
+  clauseText: string
+  pageType?: string
+  prefetchedData?: MLInsightData | null
+}) => {
+  const [data, setData] = useState<MLInsightData | null>(prefetchedData ?? null)
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState(false)
-  const [fetched, setFetched] = useState(false)
+  const [fetched, setFetched] = useState(!!prefetchedData)
+
+  // Sync if batch data arrives after mount
+  useEffect(() => {
+    if (prefetchedData && !fetched) {
+      setData(prefetchedData)
+      setFetched(true)
+    }
+  }, [prefetchedData, fetched])
 
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
@@ -110,7 +126,11 @@ const MLInsightPanel = ({ clauseText }: { clauseText: string }) => {
       const res = await fetch(`${baseUrl}/analyze/ml-risk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clause: clauseText, compare_symbolic: true }),
+        body: JSON.stringify({ 
+          clause: clauseText, 
+          compare_symbolic: true,
+          page_type: pageType 
+        }),
       })
       const json: MLInsightData = await res.json()
       setData(json)
@@ -197,6 +217,7 @@ const MLInsightPanel = ({ clauseText }: { clauseText: string }) => {
 export interface RiskClause {
   id: number
   page: number
+  page_type?: string // New
   original_text: string
   simplified: string
   risk_score: number
@@ -218,16 +239,12 @@ export function RiskSidebar({
   selectedClauseId,
   onSelectClause,
   onSimulateFinancialImpact,
-
   avgRiskScore,
   documentLanguage,
 }: RiskSidebarProps) {
-  // Detect if clause has financial metrics
-  // Detect if clause has financial metrics (Supports Arabic and Devanagari numerals)
-  const hasFinancialMetric = (text: string) => {
-    return /([\d\u0966-\u096F]+(?:\.[\d\u0966-\u096F]+)?)\s*%|(?:₹|Rs\.?)\s*([\d\u0966-\u096F,]+(?:\.[\d\u0966-\u096F]+)?)/.test(text)
-  }
-  // Sort clauses by risk score (highest first)
+  const hasFinancialMetric = (text: string) =>
+    /([\d\u0966-\u096F]+(?:\.[\d\u0966-\u096F]+)?)\s*%|(?:₹|Rs\.?)\s*([\d\u0966-\u096F,]+(?:\.[\d\u0966-\u096F]+)?)/.test(text)
+
   const sortedClauses = useMemo(
     () => [...clauses].sort((a, b) => b.risk_score - a.risk_score),
     [clauses]
@@ -238,27 +255,79 @@ export function RiskSidebar({
     if (score >= 70) return 'HIGH'
     return 'MEDIUM'
   }
-
   const getRiskColor = (score: number) => {
     if (score >= 80) return 'text-red-700 bg-red-50'
     if (score >= 70) return 'text-orange-700 bg-orange-50'
     return 'text-yellow-700 bg-yellow-50'
   }
-
   const getRiskBadgeColor = (score: number) => {
     if (score >= 80) return 'bg-red-500'
     if (score >= 70) return 'bg-orange-500'
     return 'bg-yellow-500'
   }
 
+  // ── Batch ML Scan state ───────────────────────────────────────────────
+  const [mlBatchResults, setMlBatchResults] = useState<Record<number, MLInsightData>>({})
+  const [batchLoading, setBatchLoading]     = useState(false)
+  const [batchDone, setBatchDone]           = useState(false)
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+  const runBatchML = useCallback(async () => {
+    if (batchLoading || clauses.length === 0) return
+    setBatchLoading(true)
+    setBatchDone(false)
+
+    const results = await Promise.allSettled(
+      clauses.map(async (clause) => {
+        const res = await fetch(`${baseUrl}/analyze/ml-risk`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            clause: clause.original_text, 
+            compare_symbolic: true,
+            page_type: clause.page_type || "TEXT"
+          }),
+        })
+        const json: MLInsightData = await res.json()
+        return { id: clause.id, data: json }
+      })
+    )
+
+    const map: Record<number, MLInsightData> = {}
+    results.forEach((r) => {
+      if (r.status === 'fulfilled') map[r.value.id] = r.value.data
+    })
+    setMlBatchResults(map)
+    setBatchLoading(false)
+    setBatchDone(true)
+  }, [clauses, batchLoading, baseUrl])
+
+  // ── Batch summary stats ───────────────────────────────────────────────
+  const batchSummary = useMemo(() => {
+    if (!batchDone) return null
+    const vals = Object.values(mlBatchResults)
+    const high   = vals.filter(v => v.ml_risk_level === 'HIGH').length
+    const medium = vals.filter(v => v.ml_risk_level === 'MEDIUM').length
+    const low    = vals.filter(v => v.ml_risk_level === 'LOW').length
+    const disagree = clauses.filter(c => {
+      const r = mlBatchResults[c.id]
+      if (!r) return false
+      // rule engine level derived from risk_score
+      const ruleLevel = c.risk_score >= 80 ? 'HIGH' : c.risk_score >= 70 ? 'HIGH' : 'MEDIUM'
+      return r.ml_risk_level !== ruleLevel && r.symbolic_risk_level !== null
+    })
+    return { high, medium, low, total: vals.length, disagree }
+  }, [batchDone, mlBatchResults, clauses])
+
   return (
     <div className="h-full flex flex-col bg-white border-l border-gray-200 overflow-hidden">
       {/* Header */}
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-6 flex-shrink-0">
-        <div className="flex items-center justify-center lg:justify-start gap-3 mb-3">
+      <div className="bg-white border-b border-gray-200 px-4 py-4 flex-shrink-0 space-y-3">
+        <div className="flex items-center justify-between">
           <h2 className="text-xl font-bold text-[#000F2E]">High-Risk Analysis</h2>
         </div>
+
+        {/* Stats row */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <p className="text-gray-500 font-semibold text-xs mb-1">DETECTED</p>
@@ -266,11 +335,84 @@ export function RiskSidebar({
           </div>
           <div>
             <p className="text-gray-500 font-semibold text-xs mb-1">AVG RISK</p>
-            <p className="text-2xl font-bold text-orange-500">
-              {avgRiskScore.toFixed(0)}
-            </p>
+            <p className="text-2xl font-bold text-orange-500">{avgRiskScore.toFixed(0)}</p>
           </div>
         </div>
+
+        {/* Batch ML Scan button */}
+        {clauses.length > 0 && (
+          <button
+            onClick={runBatchML}
+            disabled={batchLoading}
+            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all duration-200
+              bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700
+              text-white shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {batchLoading ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Scanning all {clauses.length} clauses with AI...
+              </>
+            ) : batchDone ? (
+              <>click to rescan</>
+            ) : (
+              <>
+                <Brain className="w-3.5 h-3.5" />
+                Run Full AI Scan ({clauses.length} clauses)
+              </>
+            )}
+          </button>
+        )}
+
+        {/* Batch summary panel */}
+        <AnimatePresence>
+          {batchSummary && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.25 }}
+              className="overflow-hidden"
+            >
+              <div className="rounded-xl border border-purple-100 bg-gradient-to-br from-purple-50 to-indigo-50 p-3 space-y-2">
+                <p className="text-xs font-bold text-purple-800">🤖 AI scanned all {batchSummary.total} clauses</p>
+
+                {/* Risk breakdown */}
+                <div className="grid grid-cols-3 gap-1.5">
+                  <div className="bg-red-50 border border-red-200 rounded-lg py-1.5 text-center">
+                    <p className="text-base font-black text-red-600">{batchSummary.high}</p>
+                    <p className="text-[10px] text-red-500 font-semibold">HIGH</p>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg py-1.5 text-center">
+                    <p className="text-base font-black text-amber-600">{batchSummary.medium}</p>
+                    <p className="text-[10px] text-amber-500 font-semibold">MEDIUM</p>
+                  </div>
+                  <div className="bg-green-50 border border-green-200 rounded-lg py-1.5 text-center">
+                    <p className="text-base font-black text-green-600">{batchSummary.low}</p>
+                    <p className="text-[10px] text-green-500 font-semibold">LOW</p>
+                  </div>
+                </div>
+
+                {/* Disagreement alert */}
+                {batchSummary.disagree.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+                    <p className="text-xs font-semibold text-amber-800">
+                      ⚠️ AI found {batchSummary.disagree.length} clause{batchSummary.disagree.length > 1 ? 's' : ''} riskier than initially scored
+                    </p>
+                    <p className="text-[10px] text-amber-600 mt-0.5">
+                      Clause{batchSummary.disagree.length > 1 ? 's' : ''}{' '}
+                      {batchSummary.disagree.map(c => `#${c.id}`).join(', ')} — check AI Insight
+                    </p>
+                  </div>
+                )}
+
+                {batchSummary.disagree.length === 0 && (
+                  <p className="text-[10px] text-purple-600">✅ AI agrees with all initial scores.</p>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Clauses List */}
@@ -338,8 +480,12 @@ export function RiskSidebar({
                   </p>
                 </div>
 
-                {/* ML Insight Panel */}
-                <MLInsightPanel clauseText={clause.original_text} />
+                {/* ML Insight Panel — uses batch cache if available */}
+                <MLInsightPanel
+                  clauseText={clause.original_text}
+                  pageType={clause.page_type}
+                  prefetchedData={mlBatchResults[clause.id] ?? null}
+                />
 
                 {/* Footer: Score + Buttons */}
                 <div className="flex items-center justify-between gap-2">
