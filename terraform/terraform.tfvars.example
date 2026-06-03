@@ -1,0 +1,6 @@
+project_id     = "your-gcp-project-id"
+region         = "asia-south1"
+google_api_key = "AIzaSy..."
+sarvam_api_key = "sarvam_..."
+supabase_url   = "https://your-project.supabase.co"
+supabase_key   = "eyJ..."

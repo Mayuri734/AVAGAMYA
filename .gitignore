@@ -34,3 +34,10 @@ __pycache__
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
