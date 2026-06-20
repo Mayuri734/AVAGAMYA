@@ -9,12 +9,6 @@ variable "region" {
   default     = "asia-south1"
 }
 
-variable "google_api_key" {
-  description = "API Key for Google Gemini"
-  type        = string
-  sensitive   = true
-}
-
 variable "sarvam_api_key" {
   description = "API Key for Sarvam AI"
   type        = string

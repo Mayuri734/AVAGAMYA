@@ -41,10 +41,6 @@ resource "google_cloud_run_v2_service" "main_backend" {
       }
 
       env {
-        name  = "GOOGLE_API_KEY"
-        value = var.google_api_key
-      }
-      env {
         name  = "SARVAM_API_KEY"
         value = var.sarvam_api_key
       }

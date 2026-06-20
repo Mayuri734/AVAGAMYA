@@ -12,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     
     env:
-      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}

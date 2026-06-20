@@ -27,7 +27,6 @@ from dotenv import load_dotenv
 
 from supabase import create_client, Client
 from langsmith import traceable
-from langsmith.wrappers import wrap_gemini
 
 import spacy
 import textstat
@@ -43,6 +42,8 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from fastapi.concurrency import run_in_threadpool
+from local_llm import LocalLLMRouter
 
 from compliance_engine import (
     MathematicalRiskEngine,
@@ -60,37 +61,7 @@ except ImportError:
     PYMUPDF_AVAILABLE = False
 
 # Gemini API (optional, graceful fallback if not configured)
-try:
-    import google.generativeai as genai
-
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-
-# Configure Gemini if API key is available
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-if GEMINI_AVAILABLE and GOOGLE_API_KEY:
-    try:
-        genai.configure(api_key=GOOGLE_API_KEY)
-        # Diagnostic: List models to log what's available
-        print("🔍 DEBUG: Available Gemini Models:")
-        for m in genai.list_models():
-            if "generateContent" in m.supported_generation_methods:
-                print(f"  - {m.name}")
-
-        # Use models/ prefix for better reliability with older library versions
-        # Wrap Gemini model for LangSmith tracing
-        raw_model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
-        GEMINI_MODEL = wrap_gemini(raw_model)
-
-        print(
-            "✅ Gemini Initialized & Wrapped with LangSmith: models/gemini-1.5-flash-latest"
-        )
-    except Exception as e:
-        print(f"❌ Gemini Initialization/Wrapping Failed: {e}")
-        GEMINI_MODEL = None
-else:
-    GEMINI_MODEL = None
+# Gemini API removed in favor of Sarvam AI.
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
 CV_CLASSIFIER_URL = "https://cv-page-classifier-353319363820.asia-south1.run.app"
@@ -137,10 +108,16 @@ app.add_middleware(
         "http://192.168.31.137:5173",
         "https://avagamya.vercel.app",
     ],
+    allow_origin_regex=r"https://.*\.ngrok-free\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_event():
+    # Pre-warm TinyLlama local LLM model safely in a background thread
+    await run_in_threadpool(LocalLLMRouter.pre_warm)
 
 # Supabase Cloud Configuration
 SUPABASE_URL = os.getenv("VITE_SUPABASE_URL", "")
@@ -656,73 +633,7 @@ async def simplify_with_sarvam(clauses: List[str], language: str) -> dict:
     return sarvam_map
 
 
-async def simplify_with_gemini(clauses: List[str], language: str) -> dict:
-    """NEURAL TRACK: Batch simplification with Judge-Agent verification."""
-    if not GEMINI_AVAILABLE or not GEMINI_MODEL:
-        return {c: _fallback_simplified_text(c) for c in clauses}
-
-    lang_map = {"en": "English", "hi": "Hindi", "mr": "Marathi"}
-    target_lang = lang_map.get(language, "English")
-    simplified_map = {}
-
-    for i in range(0, len(clauses), 10):
-        batch = clauses[i:i + 10]
-        # 1. Auditor
-        p = _build_gemini_prompt(batch, target_lang)
-        s, raw = await _call_gemini_api(p)
-        if not s:
-            continue
-        simps = _extract_numbered_lines(raw)
-        if len(simps) != len(batch):
-            continue
-
-        # 2. Critic
-        cp = _build_gemini_critic_prompt(batch, simps)
-        cs, craw = await _call_gemini_api(cp)
-        verts = _extract_numbered_lines(craw) if cs else ["FAIL"] * len(batch)
-
-        # 3. Handle Results
-        for idx, (cl, sm) in enumerate(zip(batch, simps)):
-            v = verts[idx].upper() if idx < len(verts) else "FAIL"
-            if "PASS" in v:
-                simplified_map[cl] = scrub_ai_text(sm)
-            else:
-                print(f"⚠️ Gemini Judge FAIL: {cl[:30]}")
-                # Single Correction Attempt
-                rp = f"Original: {cl}\nSimplify for 10th grade in {target_lang}. CORRECTION: Keep all ₹ and % values."
-                rs, rt = await _call_gemini_api(rp)
-                simplified_map[cl] = scrub_ai_text(rt) if rs else _fallback_simplified_text(cl)
-
-    return simplified_map
-
-
-def _build_gemini_critic_prompt(origs: List[str], simps: List[str]) -> str:
-    pairs = "\n".join([f"{i}. [Orig]: {o[:200]} [Simp]: {s[:200]}" for i, (o, s) in enumerate(zip(origs, simps), 1)])
-    instruction = (
-        f"Verify {len(origs)} pairs. Output ONLY {len(origs)} numbered lines "
-        "with PASS or FAIL if numerical data is lost."
-    )
-    return f"{instruction}\nPairs:\n{pairs}\nOutput:"
-
-
-def _build_gemini_prompt(batch: List[str], lang: str) -> str:
-    numbered = "\n".join([f"{i}. {c[:500]}" for i, c in enumerate(batch, 1)])
-    instruction = f"Simplify these {len(batch)} clauses for a 10th-grade student in {lang}."
-    return f"{instruction} Output exactly {len(batch)} numbered lines.\n{numbered}\nOutput:"
-
-
-async def _call_gemini_api(payload: str, retries: int = 2) -> Tuple[bool, str]:
-    """Execute Gemini API call with retry logic."""
-    for a in range(retries):
-        try:
-            res = GEMINI_MODEL.generate_content(payload)
-            return True, unicodedata.normalize("NFKC", (res.text or "").strip())
-        except Exception as e:
-            if "429" in str(e):
-                await asyncio.sleep(10)
-            else:
-                break
-    return False, ""
+# Gemini simplification functions removed.
 
 
 def _extract_numbered_lines(text: str) -> List[str]:
@@ -1417,31 +1328,36 @@ class SymbolicAnalysisEngine:
     async def _orchestrate_ai_simplification(
         cls, texts: List[str], language: str
     ) -> Dict[str, str]:
-        """Orchestrate Sarvam AI simplification with Gemini fallback."""
+        """Orchestrate TinyLlama Routing -> Sarvam AI -> Gemini fallback."""
         simplified_map = {}
         if not texts:
             return simplified_map
 
-        print(f"🚀 DEBUG: BFSI Pipeline - Attempting Sarvam AI for {len(texts)} clauses.")
+        print(f"🧠 [Agentic Router] TinyLlama evaluating {len(texts)} clauses locally...")
+        complex_texts = []
+        for text in texts:
+            # Prevent FastAPI event loop blocking by offloading HuggingFace/Torch inference to a thread
+            classification = await run_in_threadpool(LocalLLMRouter.classify_complexity_local, text)
+            if classification == "COMPLEX":
+                complex_texts.append(text)
+            else:
+                simplified_map[text] = text
+
+        if not complex_texts:
+            print("✅ All clauses routed as SIMPLE locally. Bypassing external APIs completely.")
+            return simplified_map
+
+        print(f"🚀 DEBUG: BFSI Pipeline - Attempting Sarvam AI for {len(complex_texts)} COMPLEX clauses.")
         try:
-            sarvam_map = await simplify_with_sarvam(texts, language)
+            sarvam_map = await simplify_with_sarvam(complex_texts, language)
             simplified_map.update(sarvam_map)
 
-            missing_texts = [t for t in texts if t not in simplified_map or not simplified_map[t]]
+            missing_texts = [t for t in complex_texts if t not in simplified_map or not simplified_map[t]]
             if missing_texts:
-                print(f"⚠️ Sarvam AI partially failed ({len(missing_texts)} missing). Falling back to Gemini...")
-                try:
-                    gemini_map = await simplify_with_gemini(missing_texts, language)
-                    simplified_map.update(gemini_map)
-                except Exception as ge:
-                    print(f"❌ Partial Gemini Fallback Failed: {ge}")
+                print(f"⚠️ Sarvam AI partially failed ({len(missing_texts)} missing). They will be skipped.")
         except Exception as e:
-            print(f"❌ Sarvam AI Primary Failure ({e}). Falling back to Gemini for all...")
-            try:
-                gemini_map = await simplify_with_gemini(texts, language)
-                simplified_map.update(gemini_map)
-            except Exception as ge_full:
-                print(f"🚨 CRITICAL: Both Sarvam Primary and Gemini Fallback failed! ({ge_full})")
+            print(f"❌ Sarvam AI Failure ({e}). Clauses skipped.")
+            
         return simplified_map
 
     @classmethod
