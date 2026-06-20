@@ -114,6 +114,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.on_event("startup")
 async def startup_event():
     # Pre-warm TinyLlama local LLM model safely in a background thread
@@ -1357,7 +1358,7 @@ class SymbolicAnalysisEngine:
                 print(f"⚠️ Sarvam AI partially failed ({len(missing_texts)} missing). They will be skipped.")
         except Exception as e:
             print(f"❌ Sarvam AI Failure ({e}). Clauses skipped.")
-            
+
         return simplified_map
 
     @classmethod
