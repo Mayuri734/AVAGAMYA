@@ -108,7 +108,7 @@ app.add_middleware(
         "http://192.168.31.137:5173",
         "https://avagamya.vercel.app",
     ],
-    allow_origin_regex=r"https://.*\.ngrok-free\.app",
+    allow_origin_regex=r"https://.*\.ngrok-free\.(app|dev)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
