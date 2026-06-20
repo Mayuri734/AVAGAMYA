@@ -38,6 +38,7 @@ from fastapi import (
     UploadFile,
     Query,
     BackgroundTasks,
+    Request,
 )
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -113,6 +114,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def remove_double_slashes(request: Request, call_next):
+    if "//" in request.scope.get("path", ""):
+        request.scope["path"] = request.scope["path"].replace("//", "/")
+    response = await call_next(request)
+    return response
 
 
 @app.on_event("startup")
