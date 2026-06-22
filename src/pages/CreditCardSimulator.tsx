@@ -4,11 +4,23 @@ import { Calculator } from 'lucide-react';
 
 
 
-export function CreditCardSimulator() {
-  const [principal, setPrincipal] = useState(25000);
-  const [roi, setRoi] = useState(7);
-  const [tenure, setTenure] = useState(6);
-  const [processingFeeRate, setProcessingFeeRate] = useState(1);
+export interface CreditCardSimulatorProps {
+  initialPrincipal?: number;
+  initialRoi?: number;
+  initialTenure?: number;
+  initialFee?: number;
+}
+
+export function CreditCardSimulator({
+  initialPrincipal = 25000,
+  initialRoi = 7,
+  initialTenure = 6,
+  initialFee = 1
+}: CreditCardSimulatorProps = {}) {
+  const [principal, setPrincipal] = useState(initialPrincipal);
+  const [roi, setRoi] = useState(initialRoi);
+  const [tenure, setTenure] = useState(initialTenure);
+  const [processingFeeRate, setProcessingFeeRate] = useState(initialFee);
 
   const [schedule, setSchedule] = useState<any[]>([]);
   const [summary, setSummary] = useState({

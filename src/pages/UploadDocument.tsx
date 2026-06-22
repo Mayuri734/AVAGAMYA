@@ -103,6 +103,7 @@ export function UploadDocument() {
         setAlertOpen(true)
       } else {
         setStatus('success')
+        localStorage.setItem('recent_pdf_name', file.name)
         // Navigate immediately (don't delay - state might be lost)
         console.log('Navigating to /analyze/result with state:', { analysis: data, pdfFile: file })
         navigate('/analyze/result', {

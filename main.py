@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 from supabase import create_client, Client
+from alerts_service import send_risk_alert_email
 from langsmith import traceable
 
 import spacy
@@ -45,6 +46,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastapi.concurrency import run_in_threadpool
 from local_llm import LocalLLMRouter
+from shrawya_agent import generate_shrawya_response
 
 from compliance_engine import (
     MathematicalRiskEngine,
@@ -611,32 +613,16 @@ async def simplify_with_sarvam(clauses: List[str], language: str) -> dict:
 
     async def process_single_clause(client: httpx.AsyncClient, clause: str) -> Tuple[str, str]:
         try:
-            # Step 1: Auditor
             auditor_messages = [{"role": "system", "content": prompt_template}, {"role": "user", "content": clause}]
-            payload = {"model": "sarvam-m", "messages": auditor_messages, "temperature": 0.3}
+            payload = {"model": "sarvam-30b", "messages": auditor_messages, "temperature": 0.3}
             resp = await client.post(url, json=payload, headers=headers)
             simplified = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-
-            # Step 2: Critic
-            critic_msg = [{"role": "system", "content": critic_template.format(original=clause, simplified=simplified)}]
-            c_payload = {"model": "sarvam-m", "messages": critic_msg, "temperature": 0.0}
-            c_resp = await client.post(url, json=c_payload, headers=headers)
-            if "PASS" in c_resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip().upper():
-                return (clause, scrub_ai_text(simplified))
-
-            # Step 3: Retry
-            print(f"⚠️ Handshake FAIL: {clause[:30]}...")
-            correction_msg = prompt_template + " CORRECTION: Do not lose ₹ or %."
-            retry_msg = [{"role": "system", "content": correction_msg}, {"role": "user", "content": clause}]
-            r_payload = {"model": "sarvam-m", "messages": retry_msg, "temperature": 0.2}
-            r_resp = await client.post(url, json=r_payload, headers=headers)
-            r_simplified = r_resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            return (clause, scrub_ai_text(r_simplified))
+            return (clause, scrub_ai_text(simplified))
         except Exception as e:
             print(f"❌ SARVAM AGENT ERROR: {e}")
-            return (clause, _fallback_simplified_text(clause))
+            return (clause, f"Simplification unavailable. ERROR: {str(e)}")
 
-    async with httpx.AsyncClient(timeout=45.0) as client:
+    async with httpx.AsyncClient(timeout=200.0) as client:
         results = await asyncio.gather(*[process_single_clause(client, c) for c in clauses])
         for k, v in results:
             sarvam_map[k] = v
@@ -1640,6 +1626,18 @@ async def analyze_upload(  # noqa: C901
             ],
         )
 
+    # Check for extreme risks and fire automated alerts
+    if filtered_clauses:
+        max_score = max(c.risk_score for c in filtered_clauses)
+        if max_score > 80:
+            background_tasks.add_task(
+                send_risk_alert_email,
+                recipient="compliance.officer@avagamya.com",
+                document_name=file.filename or "Uploaded Document",
+                high_risk_count=len(filtered_clauses),
+                max_score=max_score
+            )
+
     background_tasks.add_task(
         log_dpo_event,
         filename=file.filename or "unknown.pdf",
@@ -2443,5 +2441,26 @@ async def verify_page_type(
     finally:
         if 'doc' in locals():
             doc.close()
-        if 'single_page_doc' in locals():
             single_page_doc.close()
+
+class ShrawyaChatRequest(BaseModel):
+    query: str
+    history: List[Dict[str, str]]
+    document_hash: str
+    language: str = "en"
+
+@app.post("/api/agent/shrawya/chat")
+async def shrawya_chat(req: ShrawyaChatRequest):
+    try:
+        # Generate natively translated response via Sarvam Agent
+        final_response = await generate_shrawya_response(
+            query=req.query, 
+            history=req.history, 
+            document_hash=req.document_hash,
+            language=req.language
+        )
+            
+        return {"response": final_response}
+    except Exception as e:
+        print(f"❌ Shrawya Chat Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
