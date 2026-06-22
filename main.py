@@ -606,10 +606,6 @@ async def simplify_with_sarvam(clauses: List[str], language: str) -> dict:
         f"Simplify this banking clause for a 10th-grade student in {target_language}. "
         "Output ONLY the simplified sentence."
     )
-    critic_template = (
-        "Compare: Original: {original} vs Simplified: {simplified}. "
-        "Has any financial data (₹, %, days) been lost? Output ONLY 'PASS' or 'FAIL'."
-    )
 
     async def process_single_clause(client: httpx.AsyncClient, clause: str) -> Tuple[str, str]:
         try:
@@ -2443,23 +2439,25 @@ async def verify_page_type(
             doc.close()
             single_page_doc.close()
 
+
 class ShrawyaChatRequest(BaseModel):
     query: str
     history: List[Dict[str, str]]
     document_hash: str
     language: str = "en"
 
+
 @app.post("/api/agent/shrawya/chat")
 async def shrawya_chat(req: ShrawyaChatRequest):
     try:
         # Generate natively translated response via Sarvam Agent
         final_response = await generate_shrawya_response(
-            query=req.query, 
-            history=req.history, 
+            query=req.query,
+            history=req.history,
             document_hash=req.document_hash,
             language=req.language
         )
-            
+
         return {"response": final_response}
     except Exception as e:
         print(f"❌ Shrawya Chat Error: {e}")
