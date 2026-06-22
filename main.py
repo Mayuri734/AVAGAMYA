@@ -1627,14 +1627,14 @@ async def analyze_upload(  # noqa: C901
         )
 
     # Check for extreme risks and fire automated alerts
-    if filtered_clauses:
-        max_score = max(c.risk_score for c in filtered_clauses)
+    if high_risk_result.high_risk_clauses:
+        max_score = max(c.risk_score for c in high_risk_result.high_risk_clauses)
         if max_score > 80:
             background_tasks.add_task(
                 send_risk_alert_email,
                 recipient="compliance.officer@avagamya.com",
                 document_name=file.filename or "Uploaded Document",
-                high_risk_count=len(filtered_clauses),
+                high_risk_count=len(high_risk_result.high_risk_clauses),
                 max_score=max_score
             )
 
